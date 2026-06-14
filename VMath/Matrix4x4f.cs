@@ -369,6 +369,25 @@ namespace rrr.VMath
                 0, 0, 1, 0);
         }
 
+        /// <summary>
+        /// Left-handed orthographic projection mapping z into [0, 1],
+        /// consistent with <see cref="CreatePerspective"/>.
+        /// </summary>
+        public static Matrix4x4f CreateOrthographic(
+            float width,
+            float height,
+            float nearPlane,
+            float farPlane)
+        {
+            float zRange = farPlane - nearPlane;
+
+            return new Matrix4x4f(
+                2.0f / width, 0, 0, 0,
+                0, 2.0f / height, 0, 0,
+                0, 0, 1.0f / zRange, -nearPlane / zRange,
+                0, 0, 0, 1);
+        }
+
         public static Matrix4x4f CreatePerspectiveDegrees(
             float fieldOfViewDegrees,
             float aspectRatio,

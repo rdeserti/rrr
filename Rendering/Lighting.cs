@@ -35,7 +35,8 @@ public static class Lighting
         ColorRGBAf baseColor,
         ColorRGBAf specularColor,
         float shininess,
-        ColorRGBAf emissive)
+        ColorRGBAf emissive,
+        IReadOnlyList<ShadowMap?>? shadowMaps = null)
     {
         Vector3f n =
             normal.Normalized();
@@ -55,8 +56,10 @@ public static class Lighting
 
         if (lights != null)
         {
-            foreach (Light light in lights)
+            for (int li = 0; li < lights.Count; li++)
             {
+                Light light = lights[li];
+
                 Vector3f L;
                 ColorRGBAf lightColor;
                 float intensity;
@@ -83,6 +86,16 @@ public static class Lighting
                         continue;
                 }
 
+                // Shadow factor (1 = lit, 0 = shadowed) from this light's map.
+                float shadow = 1.0f;
+
+                if (shadowMaps != null && li < shadowMaps.Count)
+                {
+                    ShadowMap? map = shadowMaps[li];
+                    if (map != null)
+                        shadow = map.Sample(worldPosition, n, L);
+                }
+
                 float ndotl =
                     MathF.Max(
                         0.0f,
@@ -90,14 +103,14 @@ public static class Lighting
 
                 // Diffuse
                 float diffuse =
-                    ndotl * intensity;
+                    ndotl * intensity * shadow;
 
                 r += baseColor.R * lightColor.R * diffuse;
                 g += baseColor.G * lightColor.G * diffuse;
                 b += baseColor.B * lightColor.B * diffuse;
 
                 // Specular (Blinn-Phong half-vector), only on lit faces.
-                if (hasSpecular && ndotl > 0.0f)
+                if (hasSpecular && ndotl > 0.0f && shadow > 0.0f)
                 {
                     Vector3f h =
                         (L + V).Normalized();
@@ -108,7 +121,7 @@ public static class Lighting
                             Vector3f.Dot(n, h));
 
                     float specular =
-                        MathF.Pow(ndoth, shininess) * intensity;
+                        MathF.Pow(ndoth, shininess) * intensity * shadow;
 
                     r += specularColor.R * lightColor.R * specular;
                     g += specularColor.G * lightColor.G * specular;

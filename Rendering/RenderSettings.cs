@@ -17,6 +17,12 @@ namespace rrr.Rendering
         public bool BackfaceCulling { get; set; } =
             true;
 
+        /// <summary>Render and apply shadow maps for shadow-casting lights.</summary>
+        public bool ShadowsEnabled { get; set; } = true;
+
+        /// <summary>Square resolution of each light's shadow map.</summary>
+        public int ShadowMapResolution { get; set; } = 1024;
+
         public static RenderSettings WireFrame()
         {
             return new RenderSettings

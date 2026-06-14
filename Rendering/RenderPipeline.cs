@@ -30,6 +30,9 @@ public static class RenderPipeline
             return;
         }
 
+        // Render a shadow map per shadow-casting light (if enabled).
+        ShadowMap?[] shadowMaps = BuildShadowMaps(scene, settings);
+
         //
         // Untextured objects render with the selected shading mode.
         //
@@ -38,20 +41,20 @@ public static class RenderPipeline
             case ShadingMode.Gouraud:
                 RenderShaded<GouraudShader>(
                     framebuffer, depthBuffer, scene,
-                    view, projection, settings, MakeGouraud, IsUntextured);
+                    view, projection, settings, shadowMaps, MakeGouraud, IsUntextured);
                 break;
 
             case ShadingMode.Phong:
                 RenderShaded<PhongShader>(
                     framebuffer, depthBuffer, scene,
-                    view, projection, settings, MakePhong, IsUntextured);
+                    view, projection, settings, shadowMaps, MakePhong, IsUntextured);
                 break;
 
             case ShadingMode.Flat:
             default:
                 RenderShaded<FlatShader>(
                     framebuffer, depthBuffer, scene,
-                    view, projection, settings, MakeFlat, IsUntextured);
+                    view, projection, settings, shadowMaps, MakeFlat, IsUntextured);
                 break;
         }
 
@@ -63,7 +66,34 @@ public static class RenderPipeline
         //
         RenderShaded<TextureShader>(
             framebuffer, depthBuffer, scene,
-            view, projection, settings, MakeTexture, IsTextured);
+            view, projection, settings, shadowMaps, MakeTexture, IsTextured);
+    }
+
+    private static ShadowMap?[] BuildShadowMaps(
+        Scene.Scene scene, RenderSettings settings)
+    {
+        ShadowMap?[] maps = new ShadowMap?[scene.Lights.Count];
+
+        if (!settings.ShadowsEnabled)
+            return maps;
+
+        var (min, max) = scene.GetBoundingBox();
+
+        for (int i = 0; i < scene.Lights.Count; i++)
+        {
+            Light light = scene.Lights[i];
+
+            if (!light.CastsShadows)
+                continue;
+
+            Matrix4x4f lightVp =
+                ShadowMapRenderer.BuildLightMatrix(light, min, max);
+
+            maps[i] = ShadowMapRenderer.Render(
+                scene, lightVp, settings.ShadowMapResolution);
+        }
+
+        return maps;
     }
 
     private static bool IsTextured(SceneObject o)
@@ -94,6 +124,7 @@ public static class RenderPipeline
         ColorRGBAf emissiveColor,
         Vector3f cameraPosition,
         IReadOnlyList<Light> lights,
+        IReadOnlyList<ShadowMap?> shadowMaps,
         Material? material)
         where TShader : struct, IPixelShader;
 
@@ -104,6 +135,7 @@ public static class RenderPipeline
         Matrix4x4f view,
         Matrix4x4f projection,
         RenderSettings settings,
+        IReadOnlyList<ShadowMap?> shadowMaps,
         ShaderFactory<TShader> makeShader,
         Func<SceneObject, bool> includeObject)
         where TShader : struct, IPixelShader
@@ -160,7 +192,7 @@ public static class RenderPipeline
                     makeShader(
                         in projected,
                         baseColor, specularColor, shininess, emissiveColor,
-                        cameraPosition, lights, material);
+                        cameraPosition, lights, shadowMaps, material);
 
                 triangles.Add(new ScreenTriangle<TShader>
                 {
@@ -418,6 +450,7 @@ public static class RenderPipeline
         ColorRGBAf emissiveColor,
         Vector3f cameraPosition,
         IReadOnlyList<Light> lights,
+        IReadOnlyList<ShadowMap?> shadowMaps,
         Material? material)
     {
         // One light evaluation per triangle, using the face normal.
@@ -431,7 +464,7 @@ public static class RenderPipeline
         ColorRGBAf lit =
             Lighting.Shade(
                 centroid, faceNormal, cameraPosition, lights,
-                baseColor, specularColor, shininess, emissiveColor);
+                baseColor, specularColor, shininess, emissiveColor, shadowMaps);
 
         return new FlatShader(lit);
     }
@@ -444,17 +477,18 @@ public static class RenderPipeline
         ColorRGBAf emissiveColor,
         Vector3f cameraPosition,
         IReadOnlyList<Light> lights,
+        IReadOnlyList<ShadowMap?> shadowMaps,
         Material? material)
     {
         ColorRGBAf c0 = Lighting.Shade(
             t.W0, t.N0, cameraPosition, lights,
-            baseColor, specularColor, shininess, emissiveColor);
+            baseColor, specularColor, shininess, emissiveColor, shadowMaps);
         ColorRGBAf c1 = Lighting.Shade(
             t.W1, t.N1, cameraPosition, lights,
-            baseColor, specularColor, shininess, emissiveColor);
+            baseColor, specularColor, shininess, emissiveColor, shadowMaps);
         ColorRGBAf c2 = Lighting.Shade(
             t.W2, t.N2, cameraPosition, lights,
-            baseColor, specularColor, shininess, emissiveColor);
+            baseColor, specularColor, shininess, emissiveColor, shadowMaps);
 
         return new GouraudShader(c0, c1, c2);
     }
@@ -467,6 +501,7 @@ public static class RenderPipeline
         ColorRGBAf emissiveColor,
         Vector3f cameraPosition,
         IReadOnlyList<Light> lights,
+        IReadOnlyList<ShadowMap?> shadowMaps,
         Material? material)
     {
         return new PhongShader(
@@ -474,6 +509,7 @@ public static class RenderPipeline
             t.N0, t.N1, t.N2,
             cameraPosition,
             lights,
+            shadowMaps,
             baseColor,
             specularColor,
             shininess,
@@ -488,6 +524,7 @@ public static class RenderPipeline
         ColorRGBAf emissiveColor,
         Vector3f cameraPosition,
         IReadOnlyList<Light> lights,
+        IReadOnlyList<ShadowMap?> shadowMaps,
         Material? material)
     {
         // Diffuse texture (if any) is the albedo, tinted by baseColor.
@@ -500,6 +537,7 @@ public static class RenderPipeline
             t.UV0, t.UV1, t.UV2,
             cameraPosition,
             lights,
+            shadowMaps,
             material?.DiffuseTexture,
             material?.SpecularTexture,
             material?.EmissiveTexture,
@@ -655,6 +693,7 @@ public static class RenderPipeline
         private readonly Vector3f _n2;
         private readonly Vector3f _cameraPosition;
         private readonly IReadOnlyList<Light> _lights;
+        private readonly IReadOnlyList<ShadowMap?> _shadowMaps;
         private readonly ColorRGBAf _baseColor;
         private readonly ColorRGBAf _specularColor;
         private readonly float _shininess;
@@ -669,6 +708,7 @@ public static class RenderPipeline
             Vector3f n2,
             Vector3f cameraPosition,
             IReadOnlyList<Light> lights,
+            IReadOnlyList<ShadowMap?> shadowMaps,
             ColorRGBAf baseColor,
             ColorRGBAf specularColor,
             float shininess,
@@ -682,6 +722,7 @@ public static class RenderPipeline
             _n2 = n2;
             _cameraPosition = cameraPosition;
             _lights = lights;
+            _shadowMaps = shadowMaps;
             _baseColor = baseColor;
             _specularColor = specularColor;
             _shininess = shininess;
@@ -698,7 +739,7 @@ public static class RenderPipeline
 
             return Lighting.Shade(
                 position, normal, _cameraPosition, _lights,
-                _baseColor, _specularColor, _shininess, _emissive);
+                _baseColor, _specularColor, _shininess, _emissive, _shadowMaps);
         }
     }
 
@@ -727,6 +768,7 @@ public static class RenderPipeline
         private readonly Vector2f _uv2;
         private readonly Vector3f _cameraPosition;
         private readonly IReadOnlyList<Light> _lights;
+        private readonly IReadOnlyList<ShadowMap?> _shadowMaps;
         private readonly Texture2D? _diffuse;
         private readonly Texture2D? _specular;
         private readonly Texture2D? _emissive;
@@ -757,6 +799,7 @@ public static class RenderPipeline
             Vector2f uv2,
             Vector3f cameraPosition,
             IReadOnlyList<Light> lights,
+            IReadOnlyList<ShadowMap?> shadowMaps,
             Texture2D? diffuse,
             Texture2D? specular,
             Texture2D? emissive,
@@ -786,6 +829,7 @@ public static class RenderPipeline
             _uv2 = uv2;
             _cameraPosition = cameraPosition;
             _lights = lights;
+            _shadowMaps = shadowMaps;
             _diffuse = diffuse;
             _specular = specular;
             _emissive = emissive;
@@ -853,7 +897,7 @@ public static class RenderPipeline
 
             return Lighting.Shade(
                 position, normal, _cameraPosition, _lights,
-                albedo, specular, _shininess, emissive);
+                albedo, specular, _shininess, emissive, _shadowMaps);
         }
 
         private Vector3f PerturbNormal(

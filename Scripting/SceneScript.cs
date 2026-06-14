@@ -132,7 +132,9 @@ public sealed class SceneScript
         {
             ShadingMode = args.GetEnum("shading", _settings.ShadingMode),
             Parallel = args.GetInt("parallel", 0),
-            BackfaceCulling = args.GetBool("backface", _settings.BackfaceCulling)
+            BackfaceCulling = args.GetBool("backface", _settings.BackfaceCulling),
+            ShadowsEnabled = args.GetBool("shadows", _settings.ShadowsEnabled),
+            ShadowMapResolution = args.GetInt("shadowres", _settings.ShadowMapResolution)
         };
 
         _width = args.GetInt("width", _width);
@@ -382,12 +384,14 @@ public sealed class SceneScript
     {
         subType ??= args.Any ? "point" : "comfy";
 
+        Light light;
+
         switch (subType)
         {
             case "comfy":
                 {
                     var (min, max) = _scene.GetBoundingBox();
-                    _scene.Lights.Add(PointLight.CreateComfyLight(min, max));
+                    light = PointLight.CreateComfyLight(min, max);
                     break;
                 }
 
@@ -397,27 +401,30 @@ public sealed class SceneScript
                     Vector3f defaultPos =
                         PointLight.CreateComfyLight(min, max).Position;
 
-                    _scene.Lights.Add(new PointLight(
+                    light = new PointLight(
                         args.GetVector3("position", defaultPos),
                         args.GetColor("color", ColorRGBAf.White),
-                        args.GetFloat("intensity", 1f)));
+                        args.GetFloat("intensity", 1f));
                     break;
                 }
 
             case "directional":
                 {
-                    _scene.Lights.Add(new DirectionalLight
+                    light = new DirectionalLight
                     {
                         Direction = args.GetVector3("direction", new Vector3f(-1, -1, -1)).Normalized(),
                         Color = args.GetColor("color", ColorRGBAf.White),
                         Intensity = args.GetFloat("intensity", 1f)
-                    });
+                    };
                     break;
                 }
 
             default:
                 throw new ScriptException(args.Line, $"Unknown light type '{subType}'.");
         }
+
+        light.CastsShadows = args.GetBool("shadows", true);
+        _scene.Lights.Add(light);
     }
 
     private void DoRender(ScriptArguments args)
