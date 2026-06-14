@@ -42,23 +42,23 @@ rrr.exe scene.rrr                  # run a scene script
 
 **Models (input)**
 
-| Format                                | Status       |
-|---------------------------------------|--------------|
+| Format | Status |
+|--------|--------|
 | Wavefront OBJ (`.obj`) + MTL (`.mtl`) | ✅ Supported |
 
 **Images — textures (input)**
 
-| Format | Notes                                                                                                                |
-|--------|----------------------------------------------------------------------------------------------------------------------|
-| BMP    | 24-bit BGR and 32-bit BGRA, uncompressed (`BI_RGB`)                                                                  |
-| PNG    | 8-bit grayscale / gray+alpha / RGB / RGBA, and 1/2/4/8-bit palette (with `tRNS`); 16-bit and interlaced are rejected |
+| Format | Notes |
+|--------|-------|
+| BMP | 24-bit BGR and 32-bit BGRA, uncompressed (`BI_RGB`) |
+| PNG | 8-bit grayscale / gray+alpha / RGB / RGBA, and 1/2/4/8-bit palette (with `tRNS`); 16-bit and interlaced are rejected |
 
 **Images — output**
 
-| Format | Notes      |
-|--------|------------|
-| BMP    | 32-bit     |
-| PNG    | 8-bit RGBA |
+| Format | Notes |
+|--------|-------|
+| BMP | 32-bit |
+| PNG | 8-bit RGBA |
 
 Everything is converted internally to an RGBA32 frame buffer.
 
@@ -125,12 +125,12 @@ end to `<scriptname>.bmp`.
 ```
 rendering shading=phong backface=on width=1920 height=1080 background=0.1,0.1,0.15
 ```
-| key                | default         | meaning                                       |
-|--------------------|-----------------|-----------------------------------------------|
-| `shading`          | `flat`          | `wireframe` \| `flat` \| `gouraud` \| `phong` |
-| `backface`         | `on`            | backface culling                              |
-| `width` / `height` | `1920` / `1080` | output resolution                             |
-| `background`       | `0,0,0`         | clear color                                   |
+| key | default | meaning |
+|-----|---------|---------|
+| `shading` | `flat` | `wireframe` \| `flat` \| `gouraud` \| `phong` |
+| `backface` | `on` | backface culling |
+| `width` / `height` | `1920` / `1080` | output resolution |
+| `background` | `0,0,0` | clear color |
 
 ### `load obj` — load a model
 ```
