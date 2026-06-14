@@ -1,8 +1,6 @@
 ﻿using global::rrr.Core;
 using global::rrr.VMath;
-using rrr.Core;
 using rrr.Scene;
-using rrr.VMath;
 
 namespace rrr.Samples;
 
