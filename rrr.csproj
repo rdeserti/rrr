@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="Version.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Legge il numero di build dal file, default 0 -->
+    <BuildNumberFile>$(MSBuildProjectDirectory)\build.number</BuildNumberFile>
+    <BuildNumber Condition="Exists('$(BuildNumberFile)')">$([System.IO.File]::ReadAllText('$(BuildNumberFile)').Trim())</BuildNumber>
+    <BuildNumber Condition="'$(BuildNumber)' == ''">0</BuildNumber>
+
+    <!-- Versione finale composta -->
+    <AssemblyVersion>$(VersionMajor).$(VersionMinor).$(VersionPatch).$(BuildNumber)</AssemblyVersion>
+    <FileVersion>$(VersionMajor).$(VersionMinor).$(VersionPatch).$(BuildNumber)</FileVersion>
+    <Version>$(VersionMajor).$(VersionMinor).$(VersionPatch).$(BuildNumber)</Version>
+  </PropertyGroup>
+
+  <!-- Target: incrementa il numero di build PRIMA della compilazione -->
+  <Target Name="IncrementBuildNumber" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <NextBuildNumber>$([MSBuild]::Add($(BuildNumber), 1))</NextBuildNumber>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(BuildNumberFile)" Lines="$(NextBuildNumber)" Overwrite="true" />
+    <Message Text="Build number: $(VersionMajor).$(VersionMinor).$(VersionPatch).$(NextBuildNumber)" Importance="high" />
+  </Target>
+
+</Project>

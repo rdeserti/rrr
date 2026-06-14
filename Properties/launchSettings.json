@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "rrr": {
+      "commandName": "Project",
+      "commandLineArgs": "samples\\12221_Cat_v1_l3.obj cat.bmp"
+    }
+  }
+}

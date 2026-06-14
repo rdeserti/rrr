@@ -1,0 +1,8 @@
+<!-- Version.props -->
+<Project>
+  <PropertyGroup>
+    <VersionMajor>1</VersionMajor>
+    <VersionMinor>0</VersionMinor>
+    <VersionPatch>0</VersionPatch>
+  </PropertyGroup>
+</Project>
