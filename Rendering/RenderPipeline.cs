@@ -90,7 +90,7 @@ public static class RenderPipeline
                 ShadowMapRenderer.BuildLightMatrix(light, min, max);
 
             maps[i] = ShadowMapRenderer.Render(
-                scene, lightVp, settings.ShadowMapResolution);
+                scene, lightVp, settings.ShadowMapResolution, settings.ShadowPcfRadius);
         }
 
         return maps;

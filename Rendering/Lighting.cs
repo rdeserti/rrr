@@ -82,6 +82,29 @@ public static class Lighting
                         intensity = directional.Intensity;
                         break;
 
+                    case SpotLight spot:
+                        {
+                            L = (spot.Position - worldPosition).Normalized();
+                            lightColor = spot.Color;
+
+                            // Cone attenuation: angle between the spot axis and
+                            // the direction from the light to this fragment.
+                            Vector3f axis = spot.Direction.Normalized();
+                            float cosAngle = Vector3f.Dot(axis, -L);
+
+                            const float deg = MathF.PI / 180.0f;
+                            float cosOuter = MathF.Cos(spot.ConeAngleDegrees * deg);
+                            float cosInner = MathF.Cos(spot.InnerAngleDegrees * deg);
+
+                            float cone = Smoothstep(cosOuter, cosInner, cosAngle);
+
+                            if (cone <= 0.0f)
+                                continue; // outside the cone
+
+                            intensity = spot.Intensity * cone;
+                            break;
+                        }
+
                     default:
                         continue;
                 }
@@ -140,6 +163,15 @@ public static class Lighting
             MathF.Min(1.0f, g),
             MathF.Min(1.0f, b),
             baseColor.A);
+    }
+
+    private static float Smoothstep(float edge0, float edge1, float x)
+    {
+        if (edge0 == edge1)
+            return x >= edge1 ? 1.0f : 0.0f;
+
+        float t = MathF.Max(0.0f, MathF.Min(1.0f, (x - edge0) / (edge1 - edge0)));
+        return t * t * (3.0f - 2.0f * t);
     }
 
     /// <summary>

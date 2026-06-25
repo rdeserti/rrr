@@ -134,7 +134,8 @@ public sealed class SceneScript
             Parallel = args.GetInt("parallel", 0),
             BackfaceCulling = args.GetBool("backface", _settings.BackfaceCulling),
             ShadowsEnabled = args.GetBool("shadows", _settings.ShadowsEnabled),
-            ShadowMapResolution = args.GetInt("shadowres", _settings.ShadowMapResolution)
+            ShadowMapResolution = args.GetInt("shadowres", _settings.ShadowMapResolution),
+            ShadowPcfRadius = args.GetInt("shadowpcf", _settings.ShadowPcfRadius)
         };
 
         _width = args.GetInt("width", _width);
@@ -415,6 +416,34 @@ public sealed class SceneScript
                         Direction = args.GetVector3("direction", new Vector3f(-1, -1, -1)).Normalized(),
                         Color = args.GetColor("color", ColorRGBAf.White),
                         Intensity = args.GetFloat("intensity", 1f)
+                    };
+                    break;
+                }
+
+            case "spot":
+                {
+                    var (min, max) = _scene.GetBoundingBox();
+                    Vector3f center = (min + max) * 0.5f;
+                    Vector3f defaultPos =
+                        PointLight.CreateComfyLight(min, max).Position;
+
+                    Vector3f position = args.GetVector3("position", defaultPos);
+
+                    // Default direction aims at the scene center.
+                    Vector3f defaultDir = (center - position).Normalized();
+                    if (defaultDir.LengthSquared() < 1e-8f)
+                        defaultDir = new Vector3f(0, -1, 0);
+
+                    float cone = args.GetFloat("cone", 40f);
+
+                    light = new SpotLight
+                    {
+                        Position = position,
+                        Direction = args.GetVector3("direction", defaultDir).Normalized(),
+                        Color = args.GetColor("color", ColorRGBAf.White),
+                        Intensity = args.GetFloat("intensity", 1f),
+                        ConeAngleDegrees = cone,
+                        InnerAngleDegrees = args.GetFloat("inner", cone * 0.8f)
                     };
                     break;
                 }

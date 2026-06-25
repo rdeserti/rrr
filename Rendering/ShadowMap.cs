@@ -12,12 +12,18 @@ public sealed class ShadowMap
     private readonly float[] _depth;
     private readonly int _size;
     private readonly Matrix4x4f _lightViewProjection;
+    private readonly int _pcfRadius;
 
-    public ShadowMap(float[] depth, int size, Matrix4x4f lightViewProjection)
+    public ShadowMap(
+        float[] depth,
+        int size,
+        Matrix4x4f lightViewProjection,
+        int pcfRadius)
     {
         _depth = depth;
         _size = size;
         _lightViewProjection = lightViewProjection;
+        _pcfRadius = pcfRadius < 0 ? 0 : pcfRadius;
     }
 
     /// <summary>
@@ -45,17 +51,49 @@ public sealed class ShadowMap
             return 1.0f;
         }
 
-        int x = (int)(u * _size);
-        int y = (int)((1.0f - v) * _size);
+        int cx = (int)(u * _size);
+        int cy = (int)((1.0f - v) * _size);
 
+        // Slope-scaled depth bias, also scaled by the PCF kernel radius: a
+        // wider kernel reaches texels farther across the surface, whose depth
+        // differs more, so it needs proportionally more bias to avoid the
+        // self-shadow acne (which PCF would otherwise smear into a gray veil).
+        float ndotl = MathF.Max(0.0f, Vector3f.Dot(normal.Normalized(), L));
+        float tanTheta = MathF.Sqrt(MathF.Max(0.0f, 1.0f - ndotl * ndotl))
+                         / MathF.Max(ndotl, 0.05f);
+
+        float bias = (0.0006f + 0.0015f * tanTheta) * (1 + _pcfRadius);
+        bias = MathF.Min(bias, 0.02f);
+
+        float compare = ndc.Z - bias;
+
+        // PCF: average the depth test over a (2r+1)x(2r+1) neighborhood so
+        // shadow edges fade out instead of being a hard step.
+        int r = _pcfRadius;
+
+        if (r == 0)
+            return compare > DepthAt(cx, cy) ? 0.0f : 1.0f;
+
+        float lit = 0.0f;
+        int samples = 0;
+
+        for (int dy = -r; dy <= r; dy++)
+        {
+            for (int dx = -r; dx <= r; dx++)
+            {
+                lit += compare > DepthAt(cx + dx, cy + dy) ? 0.0f : 1.0f;
+                samples++;
+            }
+        }
+
+        return lit / samples;
+    }
+
+    private float DepthAt(int x, int y)
+    {
         if (x < 0) x = 0; else if (x >= _size) x = _size - 1;
         if (y < 0) y = 0; else if (y >= _size) y = _size - 1;
 
-        float stored = _depth[y * _size + x];
-
-        float ndotl = MathF.Max(0.0f, Vector3f.Dot(normal.Normalized(), L));
-        float bias = MathF.Max(0.0008f, 0.004f * (1.0f - ndotl));
-
-        return ndc.Z - bias > stored ? 0.0f : 1.0f;
+        return _depth[y * _size + x];
     }
 }

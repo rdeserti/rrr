@@ -16,7 +16,8 @@ public static class ShadowMapRenderer
     public static ShadowMap Render(
         Scene.Scene scene,
         Matrix4x4f lightViewProjection,
-        int size)
+        int size,
+        int pcfRadius)
     {
 
         Log.Debug("ShadowMap");
@@ -52,7 +53,7 @@ public static class ShadowMapRenderer
             }
         }
 
-        return new ShadowMap(depth.Depth, size, lightViewProjection);
+        return new ShadowMap(depth.Depth, size, lightViewProjection, pcfRadius);
     }
 
     private static bool Project(
@@ -98,10 +99,33 @@ public static class ShadowMapRenderer
 
             Matrix4x4f view = Matrix4x4f.CreateLookAt(eye, center, up);
 
-            float extent = radius * 2.2f;
-            Matrix4x4f proj = Matrix4x4f.CreateOrthographic(
-                extent, extent, 0.05f, radius * 4.0f + 0.1f);
+            DepthRange(view, min, max, out float near, out float far);
 
+            float extent = radius * 2.2f;
+            Matrix4x4f proj = Matrix4x4f.CreateOrthographic(extent, extent, near, far);
+
+            return proj * view;
+        }
+
+        if (light is SpotLight spot)
+        {
+            Vector3f eye = spot.Position;
+
+            Vector3f dir = spot.Direction.Normalized();
+            if (dir.LengthSquared() < 1e-8f)
+                dir = (center - eye).Normalized();
+
+            Vector3f up = MathF.Abs(dir.Y) > 0.99f ? Vector3f.UnitZ : Vector3f.UnitY;
+            Matrix4x4f view = Matrix4x4f.CreateLookAt(eye, eye + dir, up);
+
+            DepthRange(view, min, max, out float near, out float far);
+
+            // The shadow frustum matches the spot cone (full angle).
+            const float deg = MathF.PI / 180.0f;
+            float fov = 2.0f * spot.ConeAngleDegrees * deg;
+            fov = MathF.Min(3.0f, MathF.Max(0.1f, fov));
+
+            Matrix4x4f proj = Matrix4x4f.CreatePerspective(fov, 1.0f, near, far);
             return proj * view;
         }
 
@@ -123,17 +147,7 @@ public static class ShadowMapRenderer
             float fov = 2.0f * MathF.Atan2(radius, dist) * 1.4f;
             fov = MathF.Min(2.8f, MathF.Max(0.1f, fov));
 
-            // Tight depth range around the scene. Keep far/near bounded so the
-            // perspective depth buffer retains precision (otherwise distant
-            // occluders and receivers collapse to the same z and cast no
-            // shadow). near falls back to a fraction of far if the light is
-            // inside/near the bounding sphere.
-            float far = dist + radius * 1.5f;
-            float near = dist - radius;
-
-            float minNear = far / 500.0f;
-            if (near < minNear)
-                near = minNear;
+            DepthRange(view, min, max, out float near, out float far);
 
             Matrix4x4f proj = Matrix4x4f.CreatePerspective(fov, 1.0f, near, far);
 
@@ -141,5 +155,42 @@ public static class ShadowMapRenderer
         }
 
         return Matrix4x4f.Identity;
+    }
+
+    /// <summary>
+    /// Tight near/far for the light by projecting the 8 bounding-box corners
+    /// into the light's view space and taking the actual depth extent along
+    /// the view axis. A tight range keeps the depth buffer precise, which is
+    /// essential for the occluder/receiver comparison to work.
+    /// </summary>
+    private static void DepthRange(
+        Matrix4x4f view, Vector3f min, Vector3f max, out float near, out float far)
+    {
+        float minZ = float.MaxValue;
+        float maxZ = float.MinValue;
+
+        for (int c = 0; c < 8; c++)
+        {
+            Vector3f corner = new Vector3f(
+                (c & 1) == 0 ? min.X : max.X,
+                (c & 2) == 0 ? min.Y : max.Y,
+                (c & 4) == 0 ? min.Z : max.Z);
+
+            float z = (view * Vector4f.FromVector3(corner, 1.0f)).Z;
+
+            if (z < minZ) minZ = z;
+            if (z > maxZ) maxZ = z;
+        }
+
+        float margin = MathF.Max(0.01f, (maxZ - minZ) * 0.05f);
+
+        near = minZ - margin;
+        far = maxZ + margin;
+
+        if (near < 0.05f)
+            near = 0.05f;
+
+        if (far <= near)
+            far = near + 1.0f;
     }
 }

@@ -23,6 +23,12 @@ namespace rrr.Rendering
         /// <summary>Square resolution of each light's shadow map.</summary>
         public int ShadowMapResolution { get; set; } = 1024;
 
+        /// <summary>
+        /// PCF kernel radius in texels for soft shadow edges. 0 = hard
+        /// shadows (single sample); 1 = 3x3, 2 = 5x5, etc.
+        /// </summary>
+        public int ShadowPcfRadius { get; set; } = 1;
+
         public static RenderSettings WireFrame()
         {
             return new RenderSettings
