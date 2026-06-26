@@ -30,8 +30,7 @@ namespace rrr.Importers;
 /// colors) and TANGENT; sparse accessors are decoded.
 ///
 /// Limitations: only triangle primitives; metallic-roughness texture, TEXCOORD_1
-/// (one UV set sampled), alpha BLEND (treated opaque), animations, skins, morph
-/// targets are ignored.
+/// (one UV set sampled), animations, skins, morph targets are ignored.
 /// </summary>
 public sealed class GltfImporter
 {
@@ -552,6 +551,21 @@ public sealed class GltfImporter
             int elementSize = compSize * components;
             int stride = view.ByteStride ?? elementSize;
             int start = view.ByteOffset + accessor.ByteOffset;
+
+            // Fast path: 32-bit floats, tightly packed — the buffer bytes are
+            // already the float[] layout, so copy the whole block at once
+            // instead of converting element by element. (Assumes little-endian,
+            // which glTF mandates and matches our target platforms.)
+            int byteCount = accessor.Count * elementSize;
+            if (accessor.ComponentType == CompFloat &&
+                stride == elementSize &&
+                start + byteCount <= buffer.Length)
+            {
+                Buffer.BlockCopy(buffer, start, result, 0, byteCount);
+                if (accessor.Sparse != null)
+                    ApplySparseFloats(accessor, components, result);
+                return result;
+            }
 
             for (int i = 0; i < accessor.Count; i++)
             {

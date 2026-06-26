@@ -91,7 +91,8 @@ executable, no external dependencies.
 - `GltfImporter.Load(path)` → `Scene` (`Gltf/` folder). Loads glTF 2.0 `.gltf`
   (JSON + external/`data:` base64 buffers) and `.glb` (`Gltf/` `ReadGlb`: 12-byte
   header + length-prefixed JSON/BIN chunks). Decodes accessors/bufferViews
-  (`ReadFloats`/`ReadIndices`, all component types + stride + normalization) for
+  (`ReadFloats`/`ReadIndices`, all component types + stride + normalization;
+  tightly-packed 32-bit floats take a `Buffer.BlockCopy` fast path) for
   `POSITION`/`NORMAL`/`TEXCOORD_0`/indices; one `Mesh` per triangle primitive.
   Walks the node graph composing transforms (`Gltf/Mat4`, column-major, TRS or
   matrix) and **bakes the world matrix into the vertices**. Converts RH→LH by
@@ -101,7 +102,9 @@ executable, no external dependencies.
   `occlusionTexture`, `alphaMode`/`alphaCutoff`, `doubleSided`,
   `KHR_materials_unlit`, base/emissive/normal textures).
   Textures resolve from external files, data-URIs and **bufferView-embedded**
-  images (PNG/BMP/baseline-JPEG, via `ImageReader.Load(byte[])`). Also imports
+  images (PNG/BMP/JPEG, via `ImageReader.Load(byte[])`), each **decoded once and
+  in parallel** (`DecodeImages`) — the bulk of load time on texture-heavy models.
+  Also imports
   **perspective cameras** (→ `Scene.Cameras`, first becomes active) and
   **`KHR_lights_punctual`** lights (directional/point/spot → `Scene.Lights`),
   positioned by each node's world transform (physical intensities clamped).
@@ -207,6 +210,13 @@ per-triangle allocation, no virtual call). The rasterizer hands `Shade` the
 Textured objects (any of diffuse/specular/emissive/normal maps) render in a
 separate pass with `TextureShader`; opaque + z-buffer makes the two passes
 order-independent.
+
+**Transparency** (`alphaMode = BLEND`) is a third, final pass routed through
+`TextureShader` (which also covers untextured transparents). Its triangles are
+**sorted back-to-front** by NDC depth and rasterized with the depth test on but
+**depth writes off**, alpha-blending src-over into the single framebuffer (no
+per-layer buffers). Sorting is per-triangle (the standard real-time
+approximation; interpenetrating transparents may composite in the wrong order).
 
 ## Shadow system
 

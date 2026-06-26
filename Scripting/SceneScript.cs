@@ -178,6 +178,7 @@ public sealed class SceneScript
     {
         _settings = new RenderSettings
         {
+            Engine = args.GetEnum("engine", _settings.Engine),
             ShadingMode = args.GetEnum("shading", _settings.ShadingMode),
             Parallel = args.GetInt("parallel", 0),
             BackfaceCulling = args.GetBool("backface", _settings.BackfaceCulling),
@@ -185,7 +186,12 @@ public sealed class SceneScript
             ShadowMapResolution = args.GetInt("shadowres", _settings.ShadowMapResolution),
             ShadowPcfRadius = args.GetInt("shadowpcf", _settings.ShadowPcfRadius),
             ShadowFrontFaceCull = args.GetBool("shadowcull", _settings.ShadowFrontFaceCull),
-            ShadowSoftness = args.GetFloat("shadowsoft", _settings.ShadowSoftness)
+            ShadowSoftness = args.GetFloat("shadowsoft", _settings.ShadowSoftness),
+
+            // Ray-tracer knobs (ignored by the rasterizer).
+            MaxBounces = args.GetInt("bounces", _settings.MaxBounces),
+            RayShadows = args.GetBool("rayshadows", _settings.RayShadows),
+            Supersampling = args.GetInt("supersampling", _settings.Supersampling)
         };
 
         _width = args.GetInt("width", _width);

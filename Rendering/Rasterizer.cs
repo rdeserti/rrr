@@ -402,7 +402,8 @@ namespace rrr.Rendering
 
             TShader shader,
             int bandMinY,
-            int bandMaxY)
+            int bandMaxY,
+            bool blend = false)
             where TShader : struct, IPixelShader
         {
             int area =
@@ -531,13 +532,41 @@ namespace rrr.Rendering
                             // (alpha-tested fragment below the cutoff).
                             if (color.A >= 0.0f)
                             {
-                                depthBuffer.WriteUnsafe(x, y, z);
+                                if (blend)
+                                {
+                                    // Transparent pass: src-over-dst into the
+                                    // existing pixel; depth is NOT written so
+                                    // later (nearer, back-to-front) transparent
+                                    // fragments still blend on top.
+                                    float a = color.A;
+                                    if (a > 0.0f)
+                                    {
+                                        ColorRGBAf dst =
+                                            ColorRGBAf.FromRGBA32(
+                                                PixelPacker.Unpack(
+                                                    frameBuffer.GetPixelUnsafe(x, y)));
 
-                                frameBuffer.SetPixelUnsafe(
-                                    x,
-                                    y,
-                                    PixelPacker.Pack(
-                                        ColorRGBA32.FromRGBAf(color)));
+                                        ColorRGBAf outc = new ColorRGBAf(
+                                            color.R * a + dst.R * (1.0f - a),
+                                            color.G * a + dst.G * (1.0f - a),
+                                            color.B * a + dst.B * (1.0f - a),
+                                            1.0f);
+
+                                        frameBuffer.SetPixelUnsafe(
+                                            x, y,
+                                            PixelPacker.Pack(ColorRGBA32.FromRGBAf(outc)));
+                                    }
+                                }
+                                else
+                                {
+                                    depthBuffer.WriteUnsafe(x, y, z);
+
+                                    frameBuffer.SetPixelUnsafe(
+                                        x,
+                                        y,
+                                        PixelPacker.Pack(
+                                            ColorRGBA32.FromRGBAf(color)));
+                                }
                             }
                         }
 

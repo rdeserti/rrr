@@ -207,7 +207,7 @@ material name="lava"  emissive=1,0.5,0.1 emissivemap="lava_e.png"
 | `invertgreen` | flip normal-map green channel (DirectX-style) |
 | `doublesided` | render both faces, normal flipped toward the viewer (`on`/`off`) |
 | `unlit` | output the base color directly, no lighting (`on`/`off`) |
-| `alphamode` | `opaque` \| `mask` \| `blend` (mask = alpha-test) |
+| `alphamode` | `opaque` \| `mask` (alpha-test) \| `blend` (sorted back-to-front transparency; alpha from the diffuse color/texture) |
 | `alphacutoff` | alpha-test threshold for `alphamode=mask` (default `0.5`) |
 
 `map_Bump`/`bump`/`norm` in MTL auto-detect grayscale (→ height) vs colored

@@ -15,6 +15,15 @@ public static class RenderPipeline
         Scene.Scene scene,
         RenderSettings settings)
     {
+        // Ray-tracing backend: a self-contained engine that consumes the same
+        // Scene/Camera/Lights/Material and writes the same FrameBuffer. It does
+        // not use the depth buffer (visibility comes from ray intersection).
+        if (settings.Engine == RenderEngine.Raytrace)
+        {
+            Raytracing.RayTracer.Render(framebuffer, scene, settings);
+            return;
+        }
+
         Matrix4x4f view =
             scene.Camera.GetViewMatrix();
 
@@ -34,40 +43,58 @@ public static class RenderPipeline
         ShadowMap?[] shadowMaps = BuildShadowMaps(scene, settings);
 
         //
-        // Untextured objects render with the selected shading mode.
+        // Opaque untextured objects render with the selected shading mode.
         //
         switch (settings.ShadingMode)
         {
             case ShadingMode.Gouraud:
                 RenderShaded<GouraudShader>(
                     framebuffer, depthBuffer, scene,
-                    view, projection, settings, shadowMaps, MakeGouraud, IsUntextured);
+                    view, projection, settings, shadowMaps, MakeGouraud, OpaqueUntextured);
                 break;
 
             case ShadingMode.Phong:
                 RenderShaded<PhongShader>(
                     framebuffer, depthBuffer, scene,
-                    view, projection, settings, shadowMaps, MakePhong, IsUntextured);
+                    view, projection, settings, shadowMaps, MakePhong, OpaqueUntextured);
                 break;
 
             case ShadingMode.Flat:
             default:
                 RenderShaded<FlatShader>(
                     framebuffer, depthBuffer, scene,
-                    view, projection, settings, shadowMaps, MakeFlat, IsUntextured);
+                    view, projection, settings, shadowMaps, MakeFlat, OpaqueUntextured);
                 break;
         }
 
         //
-        // Textured objects always use per-pixel textured shading (the
-        // texture supplies the per-pixel albedo). Drawn as a separate pass;
-        // since geometry is opaque and depth-tested, the result is
-        // independent of the order between the two passes.
+        // Opaque textured objects use per-pixel textured shading. Opaque +
+        // z-buffer makes this pass order-independent with the one above.
         //
         RenderShaded<TextureShader>(
             framebuffer, depthBuffer, scene,
-            view, projection, settings, shadowMaps, MakeTexture, IsTextured);
+            view, projection, settings, shadowMaps, MakeTexture, OpaqueTextured);
+
+        //
+        // Transparent objects (alphaMode = BLEND), last: a single pass routed
+        // through the textured shader (which also handles the untextured case),
+        // sorted back-to-front and alpha-blended into the framebuffer with the
+        // depth test on but depth writes off.
+        //
+        RenderShaded<TextureShader>(
+            framebuffer, depthBuffer, scene,
+            view, projection, settings, shadowMaps, MakeTexture, IsTransparent,
+            transparent: true);
     }
+
+    private static bool IsTransparent(SceneObject o)
+        => o.Material != null && o.Material.AlphaMode == AlphaMode.Blend;
+
+    private static bool OpaqueUntextured(SceneObject o)
+        => !IsTextured(o) && !IsTransparent(o);
+
+    private static bool OpaqueTextured(SceneObject o)
+        => IsTextured(o) && !IsTransparent(o);
 
     private static ShadowMap?[] BuildShadowMaps(
         Scene.Scene scene, RenderSettings settings)
@@ -143,7 +170,8 @@ public static class RenderPipeline
         RenderSettings settings,
         IReadOnlyList<ShadowMap?> shadowMaps,
         ShaderFactory<TShader> makeShader,
-        Func<SceneObject, bool> includeObject)
+        Func<SceneObject, bool> includeObject,
+        bool transparent = false)
         where TShader : struct, IPixelShader
     {
         Vector3f cameraPosition =
@@ -217,6 +245,14 @@ public static class RenderPipeline
             }
         }
 
+        // Transparent pass: sort back-to-front (farthest NDC z first) so the
+        // src-over blend in phase 2 composites in the correct order. Per-
+        // triangle sort (approximate — interpenetrating transparent triangles
+        // may composite wrong), the standard real-time trade-off.
+        if (transparent)
+            triangles.Sort((a, b) =>
+                (b.Z0 + b.Z1 + b.Z2).CompareTo(a.Z0 + a.Z1 + a.Z2));
+
         //
         // Phase 2 — rasterize in parallel, one horizontal band per task.
         //
@@ -251,7 +287,8 @@ public static class RenderPipeline
                     s.X2, s.Y2, s.Z2,
                     s.IW0, s.IW1, s.IW2,
                     s.Shader,
-                    bandMinY, bandMaxY);
+                    bandMinY, bandMaxY,
+                    transparent);
             }
         });
     }

@@ -62,6 +62,11 @@ namespace rrr.Core
             _pixels[y * Stride + x] = color;
         }
 
+        internal uint GetPixelUnsafe(int x, int y)
+        {
+            return _pixels[y * Stride + x];
+        }
+
         public void SetPixel(
             int x,
             int y,

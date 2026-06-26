@@ -7,12 +7,39 @@ using System.Threading.Tasks;
 
 namespace rrr.Rendering
 {
+    /// <summary>Which rendering backend produces the image.</summary>
+    public enum RenderEngine
+    {
+        /// <summary>Triangle rasterizer (the default, shadow-map based).</summary>
+        Raster,
+
+        /// <summary>Ray tracer (shadow rays + reflections).</summary>
+        Raytrace
+    }
+
     public class RenderSettings
     {
+        /// <summary>Selects the rasterizer or the ray tracer backend.</summary>
+        public RenderEngine Engine { get; set; } =
+            RenderEngine.Raster;
+
         public ShadingMode ShadingMode { get; set; } =
             ShadingMode.Flat;
 
         public int Parallel { get; set; } = 0;
+
+        //
+        // Ray-tracer knobs (ignored by the rasterizer).
+        //
+
+        /// <summary>Max recursion depth for reflection (and later refraction) rays.</summary>
+        public int MaxBounces { get; set; } = 4;
+
+        /// <summary>Cast shadow rays in the ray tracer (per-light gated by Light.CastsShadows).</summary>
+        public bool RayShadows { get; set; } = true;
+
+        /// <summary>Supersampling factor per axis (1 = off, 2 = 2x2 = 4 samples/pixel).</summary>
+        public int Supersampling { get; set; } = 1;
 
         public bool BackfaceCulling { get; set; } =
             true;

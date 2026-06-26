@@ -44,8 +44,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the internals and
   - **Normal maps** (tangent-space) and **height/bump maps**, with automatic
     grayscale-vs-normal detection and an `invertgreen` flag for DirectX-style
     normal maps
-  - **Ambient-occlusion maps**, **alpha-test** (mask + cutoff), **double-sided**
-    materials, and **unlit** materials
+  - **Ambient-occlusion maps**, **alpha-test** (mask + cutoff), **alpha
+    blending** (sorted back-to-front transparency), **double-sided** materials,
+    and **unlit** materials
   - **Per-vertex colors** (modulate the albedo)
   - Solid-color fallback (or a stable random color when no material is present)
 - **Texture sampling:** nearest / bilinear, repeat / clamp wrapping.

@@ -11,7 +11,7 @@ namespace rrr.Scene
         /// <summary>Alpha-test: fragments below <see cref="Material.AlphaCutoff"/> are discarded.</summary>
         Mask,
 
-        /// <summary>Blended transparency (not yet rendered as such; treated as opaque).</summary>
+        /// <summary>Alpha-blended transparency (sorted back-to-front, src-over).</summary>
         Blend
     }
 
