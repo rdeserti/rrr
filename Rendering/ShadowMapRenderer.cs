@@ -17,10 +17,11 @@ public static class ShadowMapRenderer
         Scene.Scene scene,
         Matrix4x4f lightViewProjection,
         int size,
-        int pcfRadius)
+        int pcfRadius,
+        float worldTexel,
+        bool frontFaceCull,
+        float softness)
     {
-
-        Log.Debug("ShadowMap");
         // Reuse the rasterizer: it writes interpolated NDC z into the depth
         // buffer, which is exactly what a shadow map stores. The color buffer
         // is discarded.
@@ -41,7 +42,16 @@ public static class ShadowMapRenderer
                     Project(mvp, vertices[indices[i + 1]].Position, size, out int x1, out int y1, out float z1) &&
                     Project(mvp, vertices[indices[i + 2]].Position, size, out int x2, out int y2, out float z2))
                 {
-                    // No backface culling: both sides occlude.
+                    // Front-face culling: render only faces pointing away from
+                    // the light (positive screen area in this convention), so
+                    // self-shadow acne ends up behind the geometry.
+                    if (frontFaceCull)
+                    {
+                        int area = (x2 - x0) * (y1 - y0) - (y2 - y0) * (x1 - x0);
+                        if (area < 0)
+                            continue;
+                    }
+
                     Rasterizer.FillTriangle(
                         color, depth,
                         x0, y0, z0,
@@ -53,7 +63,8 @@ public static class ShadowMapRenderer
             }
         }
 
-        return new ShadowMap(depth.Depth, size, lightViewProjection, pcfRadius);
+        return new ShadowMap(
+            depth.Depth, size, lightViewProjection, pcfRadius, worldTexel, softness);
     }
 
     private static bool Project(
@@ -80,8 +91,11 @@ public static class ShadowMapRenderer
     /// Builds the view-projection matrix for a light, framed on the scene
     /// bounding box.
     /// </summary>
-    public static Matrix4x4f BuildLightMatrix(Light light, Vector3f min, Vector3f max)
+    public static Matrix4x4f BuildLightMatrix(
+        Light light, Vector3f min, Vector3f max, out float worldExtent)
     {
+        worldExtent = 1.0f;
+
         Vector3f center = (min + max) * 0.5f;
 
         float radius = (max - min).Length() * 0.5f;
@@ -102,6 +116,8 @@ public static class ShadowMapRenderer
             DepthRange(view, min, max, out float near, out float far);
 
             float extent = radius * 2.2f;
+            worldExtent = extent;
+
             Matrix4x4f proj = Matrix4x4f.CreateOrthographic(extent, extent, near, far);
 
             return proj * view;
@@ -125,6 +141,9 @@ public static class ShadowMapRenderer
             float fov = 2.0f * spot.ConeAngleDegrees * deg;
             fov = MathF.Min(3.0f, MathF.Max(0.1f, fov));
 
+            float dist = (center - eye).Length();
+            worldExtent = 2.0f * MathF.Tan(fov * 0.5f) * MathF.Max(dist, 1e-3f);
+
             Matrix4x4f proj = Matrix4x4f.CreatePerspective(fov, 1.0f, near, far);
             return proj * view;
         }
@@ -146,6 +165,8 @@ public static class ShadowMapRenderer
             // FOV wide enough to cover the bounding sphere, with margin.
             float fov = 2.0f * MathF.Atan2(radius, dist) * 1.4f;
             fov = MathF.Min(2.8f, MathF.Max(0.1f, fov));
+
+            worldExtent = 2.0f * MathF.Tan(fov * 0.5f) * dist;
 
             DepthRange(view, min, max, out float near, out float far);
 

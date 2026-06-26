@@ -87,10 +87,14 @@ public static class RenderPipeline
                 continue;
 
             Matrix4x4f lightVp =
-                ShadowMapRenderer.BuildLightMatrix(light, min, max);
+                ShadowMapRenderer.BuildLightMatrix(light, min, max, out float worldExtent);
+
+            float worldTexel = worldExtent / settings.ShadowMapResolution;
 
             maps[i] = ShadowMapRenderer.Render(
-                scene, lightVp, settings.ShadowMapResolution, settings.ShadowPcfRadius);
+                scene, lightVp,
+                settings.ShadowMapResolution, settings.ShadowPcfRadius,
+                worldTexel, settings.ShadowFrontFaceCull, settings.ShadowSoftness);
         }
 
         return maps;
@@ -103,7 +107,9 @@ public static class RenderPipeline
             (m.DiffuseTexture != null ||
              m.SpecularTexture != null ||
              m.EmissiveTexture != null ||
-             m.NormalTexture != null);
+             m.NormalTexture != null ||
+             m.OcclusionTexture != null ||
+             m.AlphaMode == AlphaMode.Mask);
     }
 
     private static bool IsUntextured(SceneObject o) => !IsTextured(o);
@@ -169,13 +175,19 @@ public static class RenderPipeline
 
             Material? material = sceneObject.Material;
 
+            // Double-sided materials disable backface culling so both faces
+            // are rasterized (their normals are flipped toward the viewer when
+            // shading).
+            bool backfaceCull =
+                settings.BackfaceCulling && !(material?.DoubleSided ?? false);
+
             for (int i = 0;
                  i < mesh.Indices.Count;
                  i += 3)
             {
                 if (!ProjectTriangle(
                         framebuffer, mesh, i, world, wvp,
-                        settings.BackfaceCulling,
+                        backfaceCull,
                         out ProjectedTriangle projected))
                 {
                     continue;
@@ -412,8 +424,15 @@ public static class RenderPipeline
         result.UV1 = v1.UV;
         result.UV2 = v2.UV;
 
+        result.C0 = v0.Color;
+        result.C1 = v1.Color;
+        result.C2 = v2.Color;
+
         return true;
     }
+
+    private static ColorRGBAf Mul(ColorRGBAf a, ColorRGBAf b)
+        => new ColorRGBAf(a.R * b.R, a.G * b.G, a.B * b.B, a.A * b.A);
 
     private static void GetSurface(
         Material? material,
@@ -461,10 +480,20 @@ public static class RenderPipeline
         Vector3f centroid =
             (t.W0 + t.W1 + t.W2) / 3.0f;
 
+        // Per-vertex color (averaged over the triangle for flat shading).
+        ColorRGBAf vcolor = new ColorRGBAf(
+            (t.C0.R + t.C1.R + t.C2.R) / 3.0f,
+            (t.C0.G + t.C1.G + t.C2.G) / 3.0f,
+            (t.C0.B + t.C1.B + t.C2.B) / 3.0f,
+            (t.C0.A + t.C1.A + t.C2.A) / 3.0f);
+
         ColorRGBAf lit =
             Lighting.Shade(
                 centroid, faceNormal, cameraPosition, lights,
-                baseColor, specularColor, shininess, emissiveColor, shadowMaps);
+                Mul(baseColor, vcolor), specularColor, shininess, emissiveColor, shadowMaps,
+                occlusion: 1.0f,
+                twoSided: material?.DoubleSided ?? false,
+                unlit: material?.Unlit ?? false);
 
         return new FlatShader(lit);
     }
@@ -480,15 +509,21 @@ public static class RenderPipeline
         IReadOnlyList<ShadowMap?> shadowMaps,
         Material? material)
     {
+        bool twoSided = material?.DoubleSided ?? false;
+        bool unlit = material?.Unlit ?? false;
+
         ColorRGBAf c0 = Lighting.Shade(
             t.W0, t.N0, cameraPosition, lights,
-            baseColor, specularColor, shininess, emissiveColor, shadowMaps);
+            Mul(baseColor, t.C0), specularColor, shininess, emissiveColor, shadowMaps,
+            1.0f, twoSided, unlit);
         ColorRGBAf c1 = Lighting.Shade(
             t.W1, t.N1, cameraPosition, lights,
-            baseColor, specularColor, shininess, emissiveColor, shadowMaps);
+            Mul(baseColor, t.C1), specularColor, shininess, emissiveColor, shadowMaps,
+            1.0f, twoSided, unlit);
         ColorRGBAf c2 = Lighting.Shade(
             t.W2, t.N2, cameraPosition, lights,
-            baseColor, specularColor, shininess, emissiveColor, shadowMaps);
+            Mul(baseColor, t.C2), specularColor, shininess, emissiveColor, shadowMaps,
+            1.0f, twoSided, unlit);
 
         return new GouraudShader(c0, c1, c2);
     }
@@ -507,13 +542,16 @@ public static class RenderPipeline
         return new PhongShader(
             t.W0, t.W1, t.W2,
             t.N0, t.N1, t.N2,
+            t.C0, t.C1, t.C2,
             cameraPosition,
             lights,
             shadowMaps,
             baseColor,
             specularColor,
             shininess,
-            emissiveColor);
+            emissiveColor,
+            material?.DoubleSided ?? false,
+            material?.Unlit ?? false);
     }
 
     private static TextureShader MakeTexture(
@@ -535,6 +573,7 @@ public static class RenderPipeline
             t.T0, t.T1, t.T2,
             t.H0, t.H1, t.H2,
             t.UV0, t.UV1, t.UV2,
+            t.C0, t.C1, t.C2,
             cameraPosition,
             lights,
             shadowMaps,
@@ -548,7 +587,13 @@ public static class RenderPipeline
             baseColor,
             specularColor,
             shininess,
-            emissiveColor);
+            emissiveColor,
+            material?.OcclusionTexture,
+            (material?.AlphaMode ?? AlphaMode.Opaque) == AlphaMode.Mask
+                ? (material?.AlphaCutoff ?? 0.5f)
+                : -1.0f,
+            material?.DoubleSided ?? false,
+            material?.Unlit ?? false);
     }
 
     /// <summary>
@@ -614,6 +659,7 @@ public static class RenderPipeline
         public Vector3f T0, T1, T2;   // world-space tangents
         public float H0, H1, H2;      // tangent handedness
         public Vector2f UV0, UV1, UV2;
+        public ColorRGBAf C0, C1, C2; // per-vertex colors
     }
 
     private struct ScreenTriangle<TShader>
@@ -691,6 +737,9 @@ public static class RenderPipeline
         private readonly Vector3f _n0;
         private readonly Vector3f _n1;
         private readonly Vector3f _n2;
+        private readonly ColorRGBAf _vc0;
+        private readonly ColorRGBAf _vc1;
+        private readonly ColorRGBAf _vc2;
         private readonly Vector3f _cameraPosition;
         private readonly IReadOnlyList<Light> _lights;
         private readonly IReadOnlyList<ShadowMap?> _shadowMaps;
@@ -698,6 +747,8 @@ public static class RenderPipeline
         private readonly ColorRGBAf _specularColor;
         private readonly float _shininess;
         private readonly ColorRGBAf _emissive;
+        private readonly bool _twoSided;
+        private readonly bool _unlit;
 
         public PhongShader(
             Vector3f w0,
@@ -706,13 +757,18 @@ public static class RenderPipeline
             Vector3f n0,
             Vector3f n1,
             Vector3f n2,
+            ColorRGBAf vc0,
+            ColorRGBAf vc1,
+            ColorRGBAf vc2,
             Vector3f cameraPosition,
             IReadOnlyList<Light> lights,
             IReadOnlyList<ShadowMap?> shadowMaps,
             ColorRGBAf baseColor,
             ColorRGBAf specularColor,
             float shininess,
-            ColorRGBAf emissive)
+            ColorRGBAf emissive,
+            bool twoSided,
+            bool unlit)
         {
             _w0 = w0;
             _w1 = w1;
@@ -720,6 +776,9 @@ public static class RenderPipeline
             _n0 = n0;
             _n1 = n1;
             _n2 = n2;
+            _vc0 = vc0;
+            _vc1 = vc1;
+            _vc2 = vc2;
             _cameraPosition = cameraPosition;
             _lights = lights;
             _shadowMaps = shadowMaps;
@@ -727,6 +786,8 @@ public static class RenderPipeline
             _specularColor = specularColor;
             _shininess = shininess;
             _emissive = emissive;
+            _twoSided = twoSided;
+            _unlit = unlit;
         }
 
         public ColorRGBAf Shade(float b0, float b1, float b2)
@@ -737,9 +798,21 @@ public static class RenderPipeline
             Vector3f normal =
                 _n0 * b0 + _n1 * b1 + _n2 * b2;
 
+            // Interpolated per-vertex color modulates the material base color.
+            ColorRGBAf vcolor = new ColorRGBAf(
+                _vc0.R * b0 + _vc1.R * b1 + _vc2.R * b2,
+                _vc0.G * b0 + _vc1.G * b1 + _vc2.G * b2,
+                _vc0.B * b0 + _vc1.B * b1 + _vc2.B * b2,
+                _vc0.A * b0 + _vc1.A * b1 + _vc2.A * b2);
+
+            ColorRGBAf albedo = new ColorRGBAf(
+                _baseColor.R * vcolor.R, _baseColor.G * vcolor.G,
+                _baseColor.B * vcolor.B, _baseColor.A * vcolor.A);
+
             return Lighting.Shade(
                 position, normal, _cameraPosition, _lights,
-                _baseColor, _specularColor, _shininess, _emissive, _shadowMaps);
+                albedo, _specularColor, _shininess, _emissive, _shadowMaps,
+                1.0f, _twoSided, _unlit);
         }
     }
 
@@ -766,6 +839,9 @@ public static class RenderPipeline
         private readonly Vector2f _uv0;
         private readonly Vector2f _uv1;
         private readonly Vector2f _uv2;
+        private readonly ColorRGBAf _vc0;
+        private readonly ColorRGBAf _vc1;
+        private readonly ColorRGBAf _vc2;
         private readonly Vector3f _cameraPosition;
         private readonly IReadOnlyList<Light> _lights;
         private readonly IReadOnlyList<ShadowMap?> _shadowMaps;
@@ -780,6 +856,10 @@ public static class RenderPipeline
         private readonly ColorRGBAf _specularColor;
         private readonly float _shininess;
         private readonly ColorRGBAf _emissiveColor;
+        private readonly Texture2D? _occlusion;
+        private readonly float _alphaCutoff;   // < 0 = no alpha test
+        private readonly bool _twoSided;
+        private readonly bool _unlit;
 
         public TextureShader(
             Vector3f w0,
@@ -797,6 +877,9 @@ public static class RenderPipeline
             Vector2f uv0,
             Vector2f uv1,
             Vector2f uv2,
+            ColorRGBAf vc0,
+            ColorRGBAf vc1,
+            ColorRGBAf vc2,
             Vector3f cameraPosition,
             IReadOnlyList<Light> lights,
             IReadOnlyList<ShadowMap?> shadowMaps,
@@ -810,8 +893,16 @@ public static class RenderPipeline
             ColorRGBAf tint,
             ColorRGBAf specularColor,
             float shininess,
-            ColorRGBAf emissiveColor)
+            ColorRGBAf emissiveColor,
+            Texture2D? occlusion,
+            float alphaCutoff,
+            bool twoSided,
+            bool unlit)
         {
+            _occlusion = occlusion;
+            _alphaCutoff = alphaCutoff;
+            _twoSided = twoSided;
+            _unlit = unlit;
             _w0 = w0;
             _w1 = w1;
             _w2 = w2;
@@ -827,6 +918,9 @@ public static class RenderPipeline
             _uv0 = uv0;
             _uv1 = uv1;
             _uv2 = uv2;
+            _vc0 = vc0;
+            _vc1 = vc1;
+            _vc2 = vc2;
             _cameraPosition = cameraPosition;
             _lights = lights;
             _shadowMaps = shadowMaps;
@@ -848,8 +942,19 @@ public static class RenderPipeline
             Vector2f uv =
                 _uv0 * b0 + _uv1 * b1 + _uv2 * b2;
 
+            // Interpolated per-vertex color (modulates the tint/albedo).
+            ColorRGBAf vcolor = new ColorRGBAf(
+                _vc0.R * b0 + _vc1.R * b1 + _vc2.R * b2,
+                _vc0.G * b0 + _vc1.G * b1 + _vc2.G * b2,
+                _vc0.B * b0 + _vc1.B * b1 + _vc2.B * b2,
+                _vc0.A * b0 + _vc1.A * b1 + _vc2.A * b2);
+
+            ColorRGBAf tint = new ColorRGBAf(
+                _tint.R * vcolor.R, _tint.G * vcolor.G,
+                _tint.B * vcolor.B, _tint.A * vcolor.A);
+
             // Albedo: diffuse map (sRGB placeholder) tinted, or just the tint.
-            ColorRGBAf albedo = _tint;
+            ColorRGBAf albedo = tint;
 
             if (_diffuse != null)
             {
@@ -857,8 +962,13 @@ public static class RenderPipeline
                     ColorSpace.SrgbToLinear(_diffuse.Sample(uv.X, uv.Y));
 
                 albedo = new ColorRGBAf(
-                    d.R * _tint.R, d.G * _tint.G, d.B * _tint.B, d.A * _tint.A);
+                    d.R * tint.R, d.G * tint.G, d.B * tint.B, d.A * tint.A);
             }
+
+            // Alpha-test (alphaMode = MASK): discard fragments below the cutoff.
+            // A negative alpha is the rasterizer's discard sentinel.
+            if (_alphaCutoff >= 0.0f && albedo.A < _alphaCutoff)
+                return new ColorRGBAf(0.0f, 0.0f, 0.0f, -1.0f);
 
             // Specular color modulated by the specular map.
             ColorRGBAf specular = _specularColor;
@@ -895,9 +1005,14 @@ public static class RenderPipeline
             if (_normalMap != null)
                 normal = PerturbNormal(normal, b0, b1, b2, uv);
 
+            // Ambient occlusion (red channel) darkens ambient + lit terms.
+            float occlusion =
+                _occlusion != null ? _occlusion.Sample(uv.X, uv.Y).R : 1.0f;
+
             return Lighting.Shade(
                 position, normal, _cameraPosition, _lights,
-                albedo, specular, _shininess, emissive, _shadowMaps);
+                albedo, specular, _shininess, emissive, _shadowMaps,
+                occlusion, _twoSided, _unlit);
         }
 
         private Vector3f PerturbNormal(

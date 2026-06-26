@@ -20,10 +20,11 @@ public static class SceneRenderer
         string outputFile,
         int width,
         int height,
-        ColorRGBAf background)
+        ColorRGBAf background,
+        double loadMilliseconds = 0.0)
     {
         Profiler profiler = new Profiler();
-        profiler.Start();
+        profiler.Start(loadMilliseconds, loadMilliseconds > 0.0 ? "Load model" : null);
 
         FrameBuffer frameBuffer =
             new FrameBuffer(width, height, PixelFormat.RGBA32);
@@ -54,13 +55,29 @@ public static class SceneRenderer
     /// a comfy light, then renders it with flat shading.
     /// </summary>
     public static void RenderObjFile(string objPath, string outputFile)
+        => RenderModelFile(objPath, outputFile);
+
+    /// <summary>
+    /// Loads any supported model (OBJ/STL/glTF/GLB) via
+    /// <see cref="ModelImporter"/>, frames it with a comfy camera and (if it
+    /// has no lights) a comfy light, then renders it with flat shading.
+    /// </summary>
+    public static void RenderModelFile(string modelPath, string outputFile)
     {
-        ObjImporter importer = new ObjImporter();
-        Scene.Scene scene = importer.Load(objPath);
+        System.Diagnostics.Stopwatch sw =
+            System.Diagnostics.Stopwatch.StartNew();
+
+        Scene.Scene scene = ModelImporter.Load(modelPath);
+
+        sw.Stop();
+        double loadMs = sw.Elapsed.TotalMilliseconds;
 
         var (min, max) = scene.GetBoundingBox();
 
-        scene.Camera = Camera.CreateComfyCam(min, max);
+        // Respect a camera/lights imported from the model (e.g. glTF); only
+        // fall back to an auto-framed comfy camera / light when none exist.
+        if (scene.Camera == null)
+            scene.Camera = Camera.CreateComfyCam(min, max);
 
         if (scene.Lights.Count == 0)
             scene.Lights.Add(PointLight.CreateComfyLight(min, max));
@@ -71,6 +88,7 @@ public static class SceneRenderer
             outputFile,
             1920,
             1080,
-            ColorRGBAf.Black);
+            ColorRGBAf.Black,
+            loadMs);
     }
 }

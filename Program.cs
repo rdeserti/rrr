@@ -17,7 +17,7 @@ if (args.Length == 0)
 {
     Console.WriteLine();
     Console.WriteLine("Usage:");
-    Console.WriteLine("  rrr.exe input.obj [output.bmp]");
+    Console.WriteLine("  rrr.exe model.obj|.stl|.gltf|.glb [output.bmp]");
     Console.WriteLine("  rrr.exe scene.rrr");
     return;
 }
@@ -46,7 +46,7 @@ try
                 ? args[1]
                 : Path.ChangeExtension(inputFile, ".bmp");
 
-        SceneRenderer.RenderObjFile(inputFile, outputFile);
+        SceneRenderer.RenderModelFile(inputFile, outputFile);
     }
 }
 catch (Exception e)

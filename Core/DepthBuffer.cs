@@ -76,4 +76,15 @@ public class DepthBuffer
 
         return true;
     }
+
+    /// <summary>Depth test only (no write); used when a shader may discard.</summary>
+    internal bool TestUnsafe(int x, int y, float z)
+    {
+        return z < _depth[y * Stride + x];
+    }
+
+    internal void WriteUnsafe(int x, int y, float z)
+    {
+        _depth[y * Stride + x] = z;
+    }
 }

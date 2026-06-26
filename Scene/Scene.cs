@@ -5,7 +5,12 @@ namespace rrr.Scene;
 
 public class Scene
 {
+    /// <summary>The active camera used for rendering.</summary>
     public Camera Camera { get; set; }
+
+    /// <summary>All cameras defined for the scene (for selection / listing).</summary>
+    public List<Camera> Cameras { get; } =
+        new();
 
     public List<SceneObject> Objects { get; } =
         new();

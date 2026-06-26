@@ -66,6 +66,30 @@ namespace rrr.Scene
         }
 
         /// <summary>
+        /// Loads a texture from an in-memory image (format auto-detected),
+        /// returning null (and logging) on any failure — the same graceful
+        /// degradation as <see cref="TryLoad"/>. Used for container-embedded
+        /// textures (e.g. glTF bufferView / data-URI images).
+        /// </summary>
+        public static Texture2D? FromBytes(byte[] data, string? label = null)
+        {
+            try
+            {
+                FrameBuffer image = ImageReader.Load(data);
+                return new Texture2D(image);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"WARNING: could not decode embedded texture" +
+                    (label != null ? $" '{label}'" : "") +
+                    $": {ex.Message}. Using solid color instead.");
+
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Heuristic: true if (almost) every sampled texel has R == G == B,
         /// i.e. the image is grayscale. Used to tell a height/bump map apart
         /// from a tangent-space normal map (which is colored, not gray).

@@ -1,4 +1,5 @@
-﻿using rrr.Scene;
+﻿using rrr.Core;
+using rrr.Scene;
 using rrr.VMath;
 using System;
 
@@ -46,7 +47,10 @@ public static class RenderMeshBuilder
             renderMesh.Indices.Add(i2);
         }
 
-        ComputeTangents(renderMesh);
+        // Use mesh-supplied tangents when present (e.g. glTF TANGENT); only
+        // derive them from UVs otherwise.
+        if (mesh.Tangents.Count == 0)
+            ComputeTangents(renderMesh);
 
         return renderMesh;
     }
@@ -165,8 +169,22 @@ public static class RenderMeshBuilder
                 UV =
                     uvIndex >= 0
                         ? mesh.UVs[uvIndex]
-                        : Vector2f.Zero
+                        : Vector2f.Zero,
+
+                // Per-vertex color (keyed by position index); white if absent.
+                Color =
+                    positionIndex < mesh.Colors.Count
+                        ? mesh.Colors[positionIndex]
+                        : ColorRGBAf.White
             };
+
+        // Mesh-supplied tangent (xyz + handedness w), keyed by position index.
+        if (positionIndex < mesh.Tangents.Count)
+        {
+            Vector4f t = mesh.Tangents[positionIndex];
+            vertex.Tangent = new Vector3f(t.X, t.Y, t.Z);
+            vertex.Handedness = t.W < 0.0f ? -1.0f : 1.0f;
+        }
 
         int index =
             renderMesh.Vertices.Count;

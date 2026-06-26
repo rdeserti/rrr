@@ -1,9 +1,67 @@
-﻿using rrr.VMath;
+﻿using System;
+using rrr.VMath;
 
 namespace rrr.Scene;
 
 public static class MeshUtils
 {
+    /// <summary>
+    /// Generates planar (box / triplanar) texture coordinates for a mesh that
+    /// has none — e.g. an STL part you want to texture. Each triangle is
+    /// projected onto the world plane perpendicular to its dominant face-normal
+    /// axis, so the result tiles cleanly without an atlas (mild distortion on
+    /// slopes, no seam handling). <paramref name="scale"/> is tiles per unit.
+    /// Existing UVs are replaced. Three fresh UVs are appended per triangle.
+    /// </summary>
+    public static void GenerateBoxUVs(Mesh mesh, float scale = 1.0f)
+    {
+        mesh.UVs.Clear();
+
+        for (int i = 0; i < mesh.Triangles.Count; i++)
+        {
+            Triangle t = mesh.Triangles[i];
+
+            Vector3f p0 = mesh.Positions[t.P0];
+            Vector3f p1 = mesh.Positions[t.P1];
+            Vector3f p2 = mesh.Positions[t.P2];
+
+            Vector3f n = Vector3f.Cross(p1 - p0, p2 - p0);
+
+            float ax = MathF.Abs(n.X);
+            float ay = MathF.Abs(n.Y);
+            float az = MathF.Abs(n.Z);
+
+            t.UV0 = AddProjectedUV(mesh, p0, ax, ay, az, scale);
+            t.UV1 = AddProjectedUV(mesh, p1, ax, ay, az, scale);
+            t.UV2 = AddProjectedUV(mesh, p2, ax, ay, az, scale);
+
+            mesh.Triangles[i] = t;
+        }
+    }
+
+    private static int AddProjectedUV(
+        Mesh mesh, Vector3f p, float ax, float ay, float az, float scale)
+    {
+        float u, v;
+
+        if (ax >= ay && ax >= az)        // X-facing -> project YZ
+        {
+            u = p.Z; v = p.Y;
+        }
+        else if (ay >= ax && ay >= az)   // Y-facing (top/bottom) -> project XZ
+        {
+            u = p.X; v = p.Z;
+        }
+        else                             // Z-facing -> project XY
+        {
+            u = p.X; v = p.Y;
+        }
+
+        int index = mesh.UVs.Count;
+        mesh.UVs.Add(new Vector2f(u * scale, v * scale));
+        return index;
+    }
+
 
     public static void GenerateNormals(
         Mesh mesh)

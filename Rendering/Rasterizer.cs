@@ -504,10 +504,12 @@ namespace rrr.Rendering
                           b1 * z1 +
                           b2 * z2;
 
-                        if (depthBuffer.TestAndWriteUnsafe(
-                                x,
-                                y,
-                                z))
+                        // Depth test first (peek). The depth write is deferred
+                        // until after shading so a shader can discard the
+                        // fragment (alpha-test) without leaving a depth hole.
+                        // For opaque shaders this is equivalent to the old
+                        // test-and-write: the same pixels are shaded.
+                        if (depthBuffer.TestUnsafe(x, y, z))
                         {
                             // Perspective-correct barycentric weights for
                             // attribute interpolation: weight each vertex by
@@ -525,11 +527,18 @@ namespace rrr.Rendering
                                     l1 * invSum,
                                     l2 * invSum);
 
-                            frameBuffer.SetPixelUnsafe(
-                                x,
-                                y,
-                                PixelPacker.Pack(
-                                    ColorRGBA32.FromRGBAf(color)));
+                            // A negative alpha is the shader's "discard" signal
+                            // (alpha-tested fragment below the cutoff).
+                            if (color.A >= 0.0f)
+                            {
+                                depthBuffer.WriteUnsafe(x, y, z);
+
+                                frameBuffer.SetPixelUnsafe(
+                                    x,
+                                    y,
+                                    PixelPacker.Pack(
+                                        ColorRGBA32.FromRGBAf(color)));
+                            }
                         }
 
                         w0 += stepX0;

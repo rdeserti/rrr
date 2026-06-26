@@ -2,6 +2,19 @@
 
 namespace rrr.Scene
 {
+    /// <summary>How a material's alpha channel is interpreted.</summary>
+    public enum AlphaMode
+    {
+        /// <summary>Alpha ignored; fully opaque.</summary>
+        Opaque,
+
+        /// <summary>Alpha-test: fragments below <see cref="Material.AlphaCutoff"/> are discarded.</summary>
+        Mask,
+
+        /// <summary>Blended transparency (not yet rendered as such; treated as opaque).</summary>
+        Blend
+    }
+
     public class Material
     {
         public string Name { get; set; } = "";
@@ -49,6 +62,24 @@ namespace rrr.Scene
 
         /// <summary>Strength of the normal/bump perturbation.</summary>
         public float BumpScale { get; set; } = 1.0f;
+
+        /// <summary>
+        /// Grayscale ambient-occlusion map (glTF occlusionTexture). Darkens the
+        /// ambient + lit terms (not emissive) per pixel. Null = no occlusion.
+        /// </summary>
+        public Texture2D? OcclusionTexture { get; set; }
+
+        /// <summary>Alpha interpretation (opaque / alpha-test / blend).</summary>
+        public AlphaMode AlphaMode { get; set; } = AlphaMode.Opaque;
+
+        /// <summary>Alpha-test threshold for <see cref="AlphaMode.Mask"/>.</summary>
+        public float AlphaCutoff { get; set; } = 0.5f;
+
+        /// <summary>Render both faces (disable backface culling for this material).</summary>
+        public bool DoubleSided { get; set; } = false;
+
+        /// <summary>Unlit (KHR_materials_unlit): output the base color directly, no lighting.</summary>
+        public bool Unlit { get; set; } = false;
 
         public string? SourceMaterialName { get; set; }
     }

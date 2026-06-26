@@ -36,10 +36,30 @@ public static class Lighting
         ColorRGBAf specularColor,
         float shininess,
         ColorRGBAf emissive,
-        IReadOnlyList<ShadowMap?>? shadowMaps = null)
+        IReadOnlyList<ShadowMap?>? shadowMaps = null,
+        float occlusion = 1.0f,
+        bool twoSided = false,
+        bool unlit = false)
     {
+        // Unlit (KHR_materials_unlit): the base color is the final color.
+        if (unlit)
+            return new ColorRGBAf(
+                MathF.Min(1.0f, baseColor.R),
+                MathF.Min(1.0f, baseColor.G),
+                MathF.Min(1.0f, baseColor.B),
+                baseColor.A);
+
         Vector3f n =
             normal.Normalized();
+
+        // Two-sided (doubleSided): flip the normal to face the viewer so back
+        // faces are lit instead of appearing black.
+        if (twoSided)
+        {
+            Vector3f toView = viewPosition - worldPosition;
+            if (Vector3f.Dot(n, toView) < 0.0f)
+                n = -n;
+        }
 
         bool hasSpecular =
             shininess > 0.0f;
@@ -50,6 +70,8 @@ public static class Lighting
                 ? (viewPosition - worldPosition).Normalized()
                 : Vector3f.Zero;
 
+        // Ambient + lit terms accumulate here, then are scaled by ambient
+        // occlusion; emissive is added afterwards (AO must not dim emission).
         float r = baseColor.R * Ambient;
         float g = baseColor.G * Ambient;
         float b = baseColor.B * Ambient;
@@ -151,6 +173,14 @@ public static class Lighting
                     b += specularColor.B * lightColor.B * specular;
                 }
             }
+        }
+
+        // Ambient occlusion scales the ambient + lit result (not emissive).
+        if (occlusion < 1.0f)
+        {
+            r *= occlusion;
+            g *= occlusion;
+            b *= occlusion;
         }
 
         // Self-illumination, added after lighting and before clamping.

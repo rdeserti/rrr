@@ -4,6 +4,8 @@ namespace rrr.Scene;
 
 public class Camera
 {
+    public string Name { get; set; } = "";
+
     public Vector3f Position { get; set; }
 
     public Vector3f Target { get; set; } =

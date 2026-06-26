@@ -24,12 +24,38 @@ public sealed class Profiler
 
     public void Start()
     {
+        Start(0.0, null);
+    }
+
+    /// <summary>
+    /// Starts profiling, optionally seeding a first entry with a duration that
+    /// was measured externally (e.g. model loading done before this region).
+    /// The seeded time is included in the per-line list and in the TOTAL.
+    /// </summary>
+    public void Start(double preMilliseconds, string? preName)
+    {
         _count = 0;
 
-        _startTicks =
-            Stopwatch.GetTimestamp();
+        long now = Stopwatch.GetTimestamp();
 
-        _lastTicks = _startTicks;
+        if (preMilliseconds > 0.0 && preName != null)
+        {
+            long preTicks =
+                (long)(preMilliseconds * Stopwatch.Frequency / 1000.0);
+
+            // Extend the timeline backwards so TOTAL accounts for the seed.
+            _startTicks = now - preTicks;
+
+            _names[_count] = preName;
+            _ticks[_count] = preTicks;
+            _count++;
+        }
+        else
+        {
+            _startTicks = now;
+        }
+
+        _lastTicks = now;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

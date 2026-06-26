@@ -19,6 +19,9 @@ internal static class ImageReaderFactory
             case ImageFormat.Png:
                 return new Readers.PngImageReader();
 
+            case ImageFormat.Jpeg:
+                return new Readers.JpegImageReader();
+
             default:
                 throw new NotSupportedException(
                     $"Image format '{format}' not supported.");

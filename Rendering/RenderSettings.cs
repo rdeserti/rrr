@@ -29,6 +29,20 @@ namespace rrr.Rendering
         /// </summary>
         public int ShadowPcfRadius { get; set; } = 1;
 
+        /// <summary>
+        /// Cull front faces when rendering shadow maps (renders back faces
+        /// only), pushing self-shadow acne behind the geometry. May remove
+        /// shadows from single-sided/thin meshes; turn off if that happens.
+        /// </summary>
+        public bool ShadowFrontFaceCull { get; set; } = true;
+
+        /// <summary>
+        /// PCSS light size (apparent light radius, in shadow-map texels).
+        /// 0 disables PCSS and uses the fixed <see cref="ShadowPcfRadius"/>
+        /// kernel. Larger values give wider, contact-hardening penumbras.
+        /// </summary>
+        public float ShadowSoftness { get; set; } = 0.0f;
+
         public static RenderSettings WireFrame()
         {
             return new RenderSettings
