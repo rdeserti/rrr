@@ -81,6 +81,20 @@ namespace rrr.Scene
         /// <summary>Unlit (KHR_materials_unlit): output the base color directly, no lighting.</summary>
         public bool Unlit { get; set; } = false;
 
+        /// <summary>
+        /// Fraction of light transmitted through the surface (refraction), in
+        /// [0,1]. 0 (default) = opaque. Used only by the ray tracer (the
+        /// rasterizer ignores it). glTF source: KHR_materials_transmission.
+        /// </summary>
+        public float Transmission { get; set; } = 0.0f;
+
+        /// <summary>
+        /// Index of refraction for transmissive materials (Snell's law). Default
+        /// 1.5 (typical glass). Used only by the ray tracer. glTF source:
+        /// KHR_materials_ior.
+        /// </summary>
+        public float IndexOfRefraction { get; set; } = 1.5f;
+
         public string? SourceMaterialName { get; set; }
     }
 }

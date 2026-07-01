@@ -16,21 +16,23 @@ public static class ShadowMapRenderer
     public static ShadowMap Render(
         Scene.Scene scene,
         Matrix4x4f lightViewProjection,
+        Matrix4x4f lightView,
         int size,
         int pcfRadius,
         float worldTexel,
         bool frontFaceCull,
         float softness)
     {
-        // Reuse the rasterizer: it writes interpolated NDC z into the depth
-        // buffer, which is exactly what a shadow map stores. The color buffer
-        // is discarded.
+        // Reuse the rasterizer. The screen position (texel) comes from the
+        // perspective view-projection, but the stored DEPTH is the linear
+        // light-space distance (light-view Z) — uniform precision, no umbra leak.
         FrameBuffer color = new FrameBuffer(size, size, PixelFormat.RGBA32);
         DepthBuffer depth = new DepthBuffer(size, size);
 
         foreach (SceneObject obj in scene.Objects)
         {
             Matrix4x4f mvp = lightViewProjection * obj.Transform;
+            Matrix4x4f modelView = lightView * obj.Transform;
 
             RenderMesh mesh = obj.GetRenderMesh();
             var indices = mesh.Indices;
@@ -38,9 +40,9 @@ public static class ShadowMapRenderer
 
             for (int i = 0; i + 2 < indices.Count; i += 3)
             {
-                if (Project(mvp, vertices[indices[i]].Position, size, out int x0, out int y0, out float z0) &&
-                    Project(mvp, vertices[indices[i + 1]].Position, size, out int x1, out int y1, out float z1) &&
-                    Project(mvp, vertices[indices[i + 2]].Position, size, out int x2, out int y2, out float z2))
+                if (Project(mvp, modelView, vertices[indices[i]].Position, size, out int x0, out int y0, out float z0) &&
+                    Project(mvp, modelView, vertices[indices[i + 1]].Position, size, out int x1, out int y1, out float z1) &&
+                    Project(mvp, modelView, vertices[indices[i + 2]].Position, size, out int x2, out int y2, out float z2))
                 {
                     // Front-face culling: render only faces pointing away from
                     // the light (positive screen area in this convention), so
@@ -64,11 +66,11 @@ public static class ShadowMapRenderer
         }
 
         return new ShadowMap(
-            depth.Depth, size, lightViewProjection, pcfRadius, worldTexel, softness);
+            depth.Depth, size, lightViewProjection, lightView, pcfRadius, worldTexel, softness);
     }
 
     private static bool Project(
-        Matrix4x4f mvp, Vector3f position, int size,
+        Matrix4x4f mvp, Matrix4x4f modelView, Vector3f position, int size,
         out int x, out int y, out float z)
     {
         x = 0; y = 0; z = 0;
@@ -82,7 +84,9 @@ public static class ShadowMapRenderer
 
         x = (int)((ndc.X * 0.5f + 0.5f) * size);
         y = (int)((1.0f - (ndc.Y * 0.5f + 0.5f)) * size);
-        z = ndc.Z;
+
+        // Stored depth = linear light-space distance (uniform precision).
+        z = (modelView * Vector4f.FromVector3(position, 1.0f)).Z;
 
         return true;
     }
@@ -92,9 +96,11 @@ public static class ShadowMapRenderer
     /// bounding box.
     /// </summary>
     public static Matrix4x4f BuildLightMatrix(
-        Light light, Vector3f min, Vector3f max, out float worldExtent)
+        Light light, Vector3f min, Vector3f max, out float worldExtent,
+        out Matrix4x4f viewMatrix)
     {
         worldExtent = 1.0f;
+        viewMatrix = Matrix4x4f.Identity;
 
         Vector3f center = (min + max) * 0.5f;
 
@@ -120,6 +126,7 @@ public static class ShadowMapRenderer
 
             Matrix4x4f proj = Matrix4x4f.CreateOrthographic(extent, extent, near, far);
 
+            viewMatrix = view;
             return proj * view;
         }
 
@@ -142,9 +149,14 @@ public static class ShadowMapRenderer
             fov = MathF.Min(3.0f, MathF.Max(0.1f, fov));
 
             float dist = (center - eye).Length();
-            worldExtent = 2.0f * MathF.Tan(fov * 0.5f) * MathF.Max(dist, 1e-3f);
+            // Texel world size for the bias = angular texel size x distance
+            // (fov*dist/res). Using 2*tan(fov/2)*dist over-estimates it badly for
+            // wide FOVs (tan blows up), which over-pushes the normal-offset and
+            // leaks light through contact shadows.
+            worldExtent = fov * MathF.Max(dist, 1e-3f);
 
             Matrix4x4f proj = Matrix4x4f.CreatePerspective(fov, 1.0f, near, far);
+            viewMatrix = view;
             return proj * view;
         }
 
@@ -166,12 +178,15 @@ public static class ShadowMapRenderer
             float fov = 2.0f * MathF.Atan2(radius, dist) * 1.4f;
             fov = MathF.Min(2.8f, MathF.Max(0.1f, fov));
 
-            worldExtent = 2.0f * MathF.Tan(fov * 0.5f) * dist;
+            // Angular texel size x distance (see spot light above): avoids the
+            // tan(fov/2) over-estimate that leaks contact shadows at wide FOVs.
+            worldExtent = fov * dist;
 
             DepthRange(view, min, max, out float near, out float far);
 
             Matrix4x4f proj = Matrix4x4f.CreatePerspective(fov, 1.0f, near, far);
 
+            viewMatrix = view;
             return proj * view;
         }
 

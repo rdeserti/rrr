@@ -187,11 +187,22 @@ public sealed class SceneScript
             ShadowPcfRadius = args.GetInt("shadowpcf", _settings.ShadowPcfRadius),
             ShadowFrontFaceCull = args.GetBool("shadowcull", _settings.ShadowFrontFaceCull),
             ShadowSoftness = args.GetFloat("shadowsoft", _settings.ShadowSoftness),
+            ShadowSamples = args.GetInt("shadowsamples", _settings.ShadowSamples),
+
+            // Supersampling anti-aliasing (both engines). 1 = off; "aa" is an alias.
+            Supersampling = args.GetInt("supersampling", args.GetInt("aa", _settings.Supersampling)),
+
+            // Gamma: input linearization and output sRGB reconstruction, each
+            // independently switchable (default on). Both engines.
+            LinearizeInput = args.GetBool("linearize", _settings.LinearizeInput),
+            EncodeSrgb = args.GetBool("srgb", _settings.EncodeSrgb),
+
+            // Debug: visualize the shadow factor as grayscale.
+            DebugShadow = args.GetBool("debugshadow", _settings.DebugShadow),
 
             // Ray-tracer knobs (ignored by the rasterizer).
             MaxBounces = args.GetInt("bounces", _settings.MaxBounces),
-            RayShadows = args.GetBool("rayshadows", _settings.RayShadows),
-            Supersampling = args.GetInt("supersampling", _settings.Supersampling)
+            RayShadows = args.GetBool("rayshadows", _settings.RayShadows)
         };
 
         _width = args.GetInt("width", _width);
@@ -642,6 +653,10 @@ public sealed class SceneScript
         material.Unlit = args.GetBool("unlit", material.Unlit);
         material.AlphaMode = args.GetEnum("alphamode", material.AlphaMode);
         material.AlphaCutoff = args.GetFloat("alphacutoff", material.AlphaCutoff);
+
+        // Refraction (ray-tracer only): transmission fraction + index of refraction.
+        material.Transmission = args.GetFloat("transmission", material.Transmission);
+        material.IndexOfRefraction = args.GetFloat("ior", material.IndexOfRefraction);
 
         _lastMaterial = name;
     }

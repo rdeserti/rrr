@@ -171,11 +171,23 @@ internal sealed class GltfMaterialExtensions
 {
     [JsonPropertyName("KHR_materials_unlit")] public object? Unlit { get; set; } // presence = unlit
     [JsonPropertyName("KHR_materials_emissive_strength")] public GltfEmissiveStrength? EmissiveStrength { get; set; }
+    [JsonPropertyName("KHR_materials_transmission")] public GltfTransmission? Transmission { get; set; }
+    [JsonPropertyName("KHR_materials_ior")] public GltfIor? Ior { get; set; }
 }
 
 internal sealed class GltfEmissiveStrength
 {
     [JsonPropertyName("emissiveStrength")] public float EmissiveStrength { get; set; } = 1.0f;
+}
+
+internal sealed class GltfTransmission
+{
+    [JsonPropertyName("transmissionFactor")] public float TransmissionFactor { get; set; } = 0.0f;
+}
+
+internal sealed class GltfIor
+{
+    [JsonPropertyName("ior")] public float Ior { get; set; } = 1.5f;
 }
 
 internal sealed class GltfPbr

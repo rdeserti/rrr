@@ -741,14 +741,35 @@ public sealed class GltfImporter
 
             GltfPbr? pbr = src.Pbr;
 
+            ColorRGBAf baseColor = ColorRGBAf.White;
             if (pbr?.BaseColorFactor is { Length: >= 3 } bc)
-                material.DiffuseColor = new ColorRGBAf(
+                baseColor = new ColorRGBAf(
                     bc[0], bc[1], bc[2], bc.Length >= 4 ? bc[3] : 1.0f);
 
-            // Roughness -> Blinn-Phong shininess; metals keep a bright spec.
+            // PBR metallic-roughness -> Blinn-Phong (pragmatic mapping):
+            //   - roughness -> shininess (smooth = sharp/strong reflection);
+            //   - metalness tints the specular F0 toward the base color, so the
+            //     ray tracer reflects metals with their own color and leaves
+            //     dielectrics at ~0.04 (faint, Fresnel-edged);
+            //   - diffuse is only HALVED for metals (not zeroed) so they stay
+            //     visible in the rasterizer, which has no reflections to fill
+            //     them. (glTF defaults: metallic = roughness = 1.)
             float roughness = pbr?.RoughnessFactor ?? 1.0f;
-            material.SpecularColor = ColorRGBAf.White;
-            material.Shininess = MathF.Max(0.0f, (1.0f - roughness)) * 128.0f;
+            float metallic = MathF.Max(0.0f, MathF.Min(1.0f, pbr?.MetallicFactor ?? 1.0f));
+
+            const float dielectricF0 = 0.04f;
+            material.SpecularColor = new ColorRGBAf(
+                dielectricF0 + (baseColor.R - dielectricF0) * metallic,
+                dielectricF0 + (baseColor.G - dielectricF0) * metallic,
+                dielectricF0 + (baseColor.B - dielectricF0) * metallic);
+
+            material.Shininess = MathF.Max(0.0f, 1.0f - roughness) * 128.0f;
+
+            material.DiffuseColor = new ColorRGBAf(
+                baseColor.R * (1.0f - 0.5f * metallic),
+                baseColor.G * (1.0f - 0.5f * metallic),
+                baseColor.B * (1.0f - 0.5f * metallic),
+                baseColor.A);
 
             // Emissive factor, scaled by KHR_materials_emissive_strength.
             float emissiveStrength =
@@ -789,6 +810,12 @@ public sealed class GltfImporter
             material.AlphaCutoff = src.AlphaCutoff ?? 0.5f;
             material.DoubleSided = src.DoubleSided;
             material.Unlit = src.Extensions?.Unlit != null;
+
+            // Transmission / refraction (ray-tracer only; raster ignores them).
+            if (src.Extensions?.Transmission != null)
+                material.Transmission = src.Extensions.Transmission.TransmissionFactor;
+            if (src.Extensions?.Ior != null)
+                material.IndexOfRefraction = src.Extensions.Ior.Ior;
 
             scene.Materials.Add(material);
             result[i] = material;

@@ -36,27 +36,48 @@ command [subtype] key=value key=value ...
 ## `rendering` — global settings
 
 ```
-rendering shading=phong backface=on width=1920 height=1080 background=0.1,0.1,0.15 \
-          shadows=on shadowres=2048 shadowpcf=2 shadowcull=on shadowsoft=0
+rendering engine=raster shading=phong backface=on width=1920 height=1080 background=0.1,0.1,0.15 \
+          shadows=on shadowres=2048 shadowpcf=2 shadowcull=on shadowsoft=0 aa=1
 ```
 
 | key | default | meaning |
 |-----|---------|---------|
-| `shading` | `flat` | `wireframe` \| `flat` \| `gouraud` \| `phong` |
-| `backface` | `on` | backface culling |
+| `engine` | `raster` | `raster` (shadow-map rasterizer) \| `raytrace` (ray tracer: shadow rays + reflections + refraction) |
+| `shading` | `flat` | `wireframe` \| `flat` \| `gouraud` \| `phong` — *raster only* (the ray tracer is always per-pixel) |
+| `backface` | `on` | backface culling (raster only) |
 | `width` / `height` | `1920` / `1080` | output resolution |
-| `background` | `0,0,0` | clear color |
-| `shadows` | `on` | enable shadow mapping |
-| `shadowres` | `1024` | shadow map resolution (square) |
-| `shadowpcf` | `1` | PCF kernel radius in texels (0 = hard, 1 = 3×3, …) |
-| `shadowcull` | `on` | front-face culling in the shadow pass (anti-acne) |
-| `shadowsoft` | `0` | PCSS light size in texels; `0` = fixed PCF, `>0` = soft contact-hardening shadows |
+| `background` | `0,0,0` | clear color (also the ray tracer's environment for rays that miss) |
+| `aa` (or `supersampling`) | `1` | supersampling factor (1 = off, 2 = 2×2, 3 = 3×3; clamped to 4). Renders at `width·aa × height·aa` then box-averages down. **Both engines.** |
+| `linearize` | `on` | gamma — input linearization: decode color inputs (textures, flat colors, background) sRGB→linear before lighting. **Both engines.** |
+| `srgb` | `on` | gamma — output reconstruction: encode the final image linear→sRGB. **Both engines.** Independent of `linearize`. |
+| `debugshadow` | `off` | debug: output the per-light shadow factor as grayscale (white = lit, black = shadowed) instead of shaded color. **Both engines** — lets you compare the raster shadow map against ray-traced shadows directly. |
+| `shadows` | `on` | enable shadows (shadow maps for raster, shadow rays for the tracer) |
+| `shadowres` | `1024` | shadow map resolution (square) — *raster only* |
+| `shadowpcf` | `1` | PCF kernel radius in texels (0 = hard, 1 = 3×3, …) — *raster only* |
+| `shadowcull` | `on` | front-face culling in the shadow pass (anti-acne) — *raster only* |
+| `shadowsoft` | `0` | soft-shadow light size; `0` = hard shadows on both engines |
+| `shadowsamples` | `16` | *ray tracer only:* shadow rays per light when `shadowsoft > 0` |
+| `bounces` | `4` | *ray tracer only:* max reflection/refraction recursion depth |
+| `rayshadows` | `on` | *ray tracer only:* cast shadow rays (in addition to the global `shadows`) |
 
 Notes:
-- `shadowsoft > 0` enables **PCSS** (variable penumbra) and overrides
-  `shadowpcf`. Visible penumbra grows with `shadowsoft` and with **lower**
-  `shadowres`; it is capped (kernel ≤ 12 texels) for cost.
+- **`engine=raytrace`** runs the ray tracer over the **same** scene/materials/
+  textures; non-reflective, non-transmissive materials render comparably to the
+  raster. `shading=` is ignored (the tracer is always per-pixel, Phong-quality).
+- `shadowsoft` is interpreted per engine: **raster** = PCSS apparent light size
+  in shadow-map texels (enables variable-penumbra PCSS, overrides `shadowpcf`,
+  kernel capped at 12); **ray tracer** = area-light radius in **world units**
+  (point/spot) or angular spread (directional), sampled with `shadowsamples`
+  rays. Pair with `aa` to clean residual penumbra noise.
 - `shadowcull=off` if thin / single-sided meshes lose their shadows.
+- Reflections and refraction are **ray-tracer only**; in the raster the same
+  materials render opaque/non-reflective (see `material` below).
+- Gamma correction is **on by default** (both `linearize` and `srgb`), so the
+  renderer is physically correct out of the box (lighting in linear space,
+  brighter mid-tones, softer light/shadow falloff) on both engines. The two
+  switches are independent: `linearize=off srgb=off` reproduces the old
+  uncorrected look; turning off only one gives an intentionally partial result
+  (too dark, or washed out) useful for debugging.
 
 ---
 
@@ -207,11 +228,28 @@ material name="lava"  emissive=1,0.5,0.1 emissivemap="lava_e.png"
 | `invertgreen` | flip normal-map green channel (DirectX-style) |
 | `doublesided` | render both faces, normal flipped toward the viewer (`on`/`off`) |
 | `unlit` | output the base color directly, no lighting (`on`/`off`) |
-| `alphamode` | `opaque` \| `mask` (alpha-test) \| `blend` (sorted back-to-front transparency; alpha from the diffuse color/texture) |
+| `alphamode` | `opaque` \| `mask` (alpha-test cutout) \| `blend` (alpha transparency; alpha from the diffuse color/texture). Both engines: the raster uses a sorted back-to-front pass; the ray tracer passes through masked fragments and composites blend src-over. |
 | `alphacutoff` | alpha-test threshold for `alphamode=mask` (default `0.5`) |
+| `transmission` | *ray tracer only:* fraction of light refracted through the surface, `0`..`1` (default `0` = opaque) |
+| `ior` | *ray tracer only:* index of refraction for `transmission > 0` (default `1.5`; `1.0` = straight-through transparency, no bending) |
 
 `map_Bump`/`bump`/`norm` in MTL auto-detect grayscale (→ height) vs colored
 (→ normal); `normalmap`/`heightmap` in scripts are explicit.
+
+**Ray-tracer reflections & refraction (material-driven):**
+- **Reflectivity** is derived from `specular` + `shininess`: a gloss factor
+  ramps from 0 (matte, no reflection) below `shininess ≈ 24` to a sharp mirror
+  by `≈ 160`, tinted by `specular` with a Fresnel edge boost. A clean mirror is
+  `specular=1,1,1 shininess=256`. Matte materials (`shininess=0`) never reflect,
+  so they stay comparable to the raster.
+- **Refraction**: set `transmission` > 0 (and an `ior`). The surface is treated
+  as a dielectric — Fresnel split into a reflected + refracted ray, recursed up
+  to `bounces`. Example glass: `material name="glass" diffuse=0,0,0 transmission=1 ior=1.5`.
+- These fields are **ignored by the rasterizer** (which renders the material with
+  its opaque base color), so setting them never breaks a raster render.
+- glTF import: reflectivity comes from metallic-roughness (`roughness→shininess`,
+  `specular = lerp(0.04, baseColor, metallic)`); `transmission`/`ior` come from
+  `KHR_materials_transmission` / `KHR_materials_ior`.
 
 ---
 
@@ -321,4 +359,32 @@ light directional name="fill" direction=1,-1,1 intensity=0.3 shadows=off
 camera comfy
 
 render file="hero.png"
+```
+
+## Ray-traced example (reflections, glass, soft shadows, AA)
+
+```
+# Same scene description — just switch the engine on and author shiny/glass
+# materials. Matte materials look the same as on the raster.
+rendering engine=raytrace shadows=on shadowsoft=0.6 shadowsamples=24 bounces=8 \
+          aa=2 width=1280 height=720 background=0.6,0.7,0.85
+
+mesh plane name="floor" size=20,20
+material name="floor" diffuse=0.4,0.4,0.45 specular=0.9,0.9,0.9 shininess=200   # reflective
+assign material="floor" to="floor"
+translate name="floor" by=0,-1,0
+
+mesh sphere name="glass" radius=1.3 segments=64 rings=32
+material name="glass" diffuse=0,0,0 transmission=1 ior=1.5                       # glass
+assign material="glass" to="glass"
+
+mesh sphere name="ball" radius=0.9 segments=48 rings=24
+material name="ball" diffuse=0.85,0.2,0.18                                       # matte (no reflection)
+assign material="ball" to="ball"
+translate name="ball" by=2.6,-0.1,0.4
+
+light point name="key" position=4,7,-5 intensity=1.4
+camera position=0,2,-7 target=0,0,0 fov=50
+
+render file="raytraced.png"
 ```

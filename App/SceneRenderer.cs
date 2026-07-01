@@ -1,3 +1,5 @@
+using System;
+using System.Threading.Tasks;
 using rrr.Core;
 using rrr.Imaging;
 using rrr.Importers;
@@ -26,13 +28,33 @@ public static class SceneRenderer
         Profiler profiler = new Profiler();
         profiler.Start(loadMilliseconds, loadMilliseconds > 0.0 ? "Load model" : null);
 
+        // Gamma correction (on by default, two independent switches): input
+        // linearization decodes color inputs (textures + flat colors + the
+        // background here) sRGB->linear so the framebuffer holds LINEAR color
+        // during rendering; output reconstruction encodes the final image
+        // linear->sRGB once, after the supersampling downsample (so the box
+        // filter averages light in linear space). Either direction off = that
+        // half is the identity.
+        ColorSpace.SrgbToLinearEnabled = settings.LinearizeInput;
+        ColorSpace.LinearToSrgbEnabled = settings.EncodeSrgb;
+
+        Lighting.DebugShadowVisualize = settings.DebugShadow;
+
+        // Supersampling: render into a buffer scaled up by the factor, then box-
+        // downsample to the requested size. Engine-agnostic (both the rasterizer
+        // and the ray tracer just fill the oversized buffer). 1 = disabled.
+        int supersampling = Math.Clamp(settings.Supersampling, 1, 4);
+
+        int renderWidth = width * supersampling;
+        int renderHeight = height * supersampling;
+
         FrameBuffer frameBuffer =
-            new FrameBuffer(width, height, PixelFormat.RGBA32);
+            new FrameBuffer(renderWidth, renderHeight, PixelFormat.RGBA32);
 
         frameBuffer.Clear(
-            PixelPacker.Pack(ColorRGBA32.FromRGBAf(background)));
+            PixelPacker.Pack(ColorRGBA32.FromRGBAf(ColorSpace.SrgbToLinear(background))));
 
-        DepthBuffer depthBuffer = new DepthBuffer(width, height);
+        DepthBuffer depthBuffer = new DepthBuffer(renderWidth, renderHeight);
 
         profiler.Mark("Create buffers");
 
@@ -40,7 +62,19 @@ public static class SceneRenderer
 
         profiler.Mark("Render");
 
-        ImageWriter.Save(frameBuffer, outputFile);
+        FrameBuffer outputBuffer = Supersampler.Downsample(frameBuffer, supersampling);
+
+        if (supersampling > 1)
+            profiler.Mark($"Downsample {supersampling}x");
+
+        // Final encode: linear -> sRGB for the whole image, once.
+        if (settings.EncodeSrgb)
+        {
+            EncodeToSrgb(outputBuffer);
+            profiler.Mark("Gamma encode");
+        }
+
+        ImageWriter.Save(outputBuffer, outputFile);
 
         profiler.Mark("Save image");
 
@@ -48,6 +82,30 @@ public static class SceneRenderer
 
         SceneStats.From(scene).Dump();
         profiler.Dump();
+    }
+
+    /// <summary>
+    /// Encodes a linear framebuffer to sRGB in place (final output step). Runs
+    /// only when gamma correction is on. Note: the framebuffer is 8-bit, so the
+    /// linear intermediate can band slightly in deep shadows — a float target
+    /// would remove that, left as future work.
+    /// </summary>
+    private static void EncodeToSrgb(FrameBuffer fb)
+    {
+        uint[] pixels = fb.Pixels;
+
+        Parallel.For(0, fb.Height, y =>
+        {
+            int row = y * fb.Stride;
+
+            for (int x = 0; x < fb.Width; x++)
+            {
+                int i = row + x;
+                ColorRGBAf linear = ColorRGBAf.FromRGBA32(PixelPacker.Unpack(pixels[i]));
+                ColorRGBAf srgb = ColorSpace.LinearToSrgb(linear);
+                pixels[i] = PixelPacker.Pack(ColorRGBA32.FromRGBAf(srgb));
+            }
+        });
     }
 
     /// <summary>

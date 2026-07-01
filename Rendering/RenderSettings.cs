@@ -41,6 +41,27 @@ namespace rrr.Rendering
         /// <summary>Supersampling factor per axis (1 = off, 2 = 2x2 = 4 samples/pixel).</summary>
         public int Supersampling { get; set; } = 1;
 
+        /// <summary>
+        /// Debug: output the per-light shadow factor as grayscale (1 = lit,
+        /// 0 = shadowed) instead of shaded color. Works on both engines, so the
+        /// raster shadow map and ray-traced shadows can be compared directly.
+        /// </summary>
+        public bool DebugShadow { get; set; } = false;
+
+        /// <summary>
+        /// Gamma — input linearization: decode color inputs (textures, flat
+        /// colors, background) sRGB-&gt;linear so lighting is done in linear space.
+        /// On by default; turn off to feed colors to the lighting math unchanged.
+        /// </summary>
+        public bool LinearizeInput { get; set; } = true;
+
+        /// <summary>
+        /// Gamma — output sRGB reconstruction: encode the final image
+        /// linear-&gt;sRGB. On by default; turn off to write the (linear) buffer
+        /// as-is. Independent of <see cref="LinearizeInput"/>. Both engines.
+        /// </summary>
+        public bool EncodeSrgb { get; set; } = true;
+
         public bool BackfaceCulling { get; set; } =
             true;
 
@@ -64,11 +85,19 @@ namespace rrr.Rendering
         public bool ShadowFrontFaceCull { get; set; } = true;
 
         /// <summary>
-        /// PCSS light size (apparent light radius, in shadow-map texels).
-        /// 0 disables PCSS and uses the fixed <see cref="ShadowPcfRadius"/>
-        /// kernel. Larger values give wider, contact-hardening penumbras.
+        /// Soft-shadow light size. Rasterizer: PCSS apparent light radius in
+        /// shadow-map texels. Ray tracer: area-light radius in <b>world units</b>
+        /// (point/spot) or angular spread (directional). 0 = hard shadows on
+        /// both engines.
         /// </summary>
         public float ShadowSoftness { get; set; } = 0.0f;
+
+        /// <summary>
+        /// Ray tracer only: number of shadow rays per light when
+        /// <see cref="ShadowSoftness"/> &gt; 0 (area-light sampling). 1 (or
+        /// softness 0) means a single hard shadow ray.
+        /// </summary>
+        public int ShadowSamples { get; set; } = 16;
 
         public static RenderSettings WireFrame()
         {

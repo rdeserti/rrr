@@ -114,12 +114,13 @@ public static class RenderPipeline
                 continue;
 
             Matrix4x4f lightVp =
-                ShadowMapRenderer.BuildLightMatrix(light, min, max, out float worldExtent);
+                ShadowMapRenderer.BuildLightMatrix(
+                    light, min, max, out float worldExtent, out Matrix4x4f lightView);
 
             float worldTexel = worldExtent / settings.ShadowMapResolution;
 
             maps[i] = ShadowMapRenderer.Render(
-                scene, lightVp,
+                scene, lightVp, lightView,
                 settings.ShadowMapResolution, settings.ShadowPcfRadius,
                 worldTexel, settings.ShadowFrontFaceCull, settings.ShadowSoftness);
         }
@@ -479,10 +480,12 @@ public static class RenderPipeline
         out float shininess,
         out ColorRGBAf emissiveColor)
     {
-        baseColor =
+        // Flat colors are authored in sRGB; decode to linear (identity when gamma
+        // is off) so the untextured shaders match the textured/ray-traced paths.
+        baseColor = ColorSpace.SrgbToLinear(
             material != null
                 ? material.DiffuseColor
-                : RandomColor(triangleIndex);
+                : RandomColor(triangleIndex));
 
         specularColor =
             material?.SpecularColor ?? ColorRGBAf.White;
@@ -490,8 +493,8 @@ public static class RenderPipeline
         shininess =
             material?.Shininess ?? 0.0f;
 
-        emissiveColor =
-            material?.EmissiveColor ?? ColorRGBAf.Black;
+        emissiveColor = ColorSpace.SrgbToLinear(
+            material?.EmissiveColor ?? ColorRGBAf.Black);
     }
 
     //
@@ -986,122 +989,32 @@ public static class RenderPipeline
                 _vc0.B * b0 + _vc1.B * b1 + _vc2.B * b2,
                 _vc0.A * b0 + _vc1.A * b1 + _vc2.A * b2);
 
-            ColorRGBAf tint = new ColorRGBAf(
-                _tint.R * vcolor.R, _tint.G * vcolor.G,
-                _tint.B * vcolor.B, _tint.A * vcolor.A);
-
-            // Albedo: diffuse map (sRGB placeholder) tinted, or just the tint.
-            ColorRGBAf albedo = tint;
-
-            if (_diffuse != null)
-            {
-                ColorRGBAf d =
-                    ColorSpace.SrgbToLinear(_diffuse.Sample(uv.X, uv.Y));
-
-                albedo = new ColorRGBAf(
-                    d.R * tint.R, d.G * tint.G, d.B * tint.B, d.A * tint.A);
-            }
-
-            // Alpha-test (alphaMode = MASK): discard fragments below the cutoff.
-            // A negative alpha is the rasterizer's discard sentinel.
-            if (_alphaCutoff >= 0.0f && albedo.A < _alphaCutoff)
-                return new ColorRGBAf(0.0f, 0.0f, 0.0f, -1.0f);
-
-            // Specular color modulated by the specular map.
-            ColorRGBAf specular = _specularColor;
-
-            if (_specular != null)
-            {
-                ColorRGBAf s = _specular.Sample(uv.X, uv.Y);
-                specular = new ColorRGBAf(
-                    s.R * _specularColor.R,
-                    s.G * _specularColor.G,
-                    s.B * _specularColor.B);
-            }
-
-            // Emissive color modulated by the emissive map.
-            ColorRGBAf emissive = _emissiveColor;
-
-            if (_emissive != null)
-            {
-                ColorRGBAf e =
-                    ColorSpace.SrgbToLinear(_emissive.Sample(uv.X, uv.Y));
-
-                emissive = new ColorRGBAf(
-                    e.R * _emissiveColor.R,
-                    e.G * _emissiveColor.G,
-                    e.B * _emissiveColor.B);
-            }
-
             Vector3f position =
                 _w0 * b0 + _w1 * b1 + _w2 * b2;
 
             Vector3f normal =
                 (_n0 * b0 + _n1 * b1 + _n2 * b2).Normalized();
 
-            if (_normalMap != null)
-                normal = PerturbNormal(normal, b0, b1, b2, uv);
+            Vector3f tangent =
+                _t0 * b0 + _t1 * b1 + _t2 * b2;
 
-            // Ambient occlusion (red channel) darkens ambient + lit terms.
-            float occlusion =
-                _occlusion != null ? _occlusion.Sample(uv.X, uv.Y).R : 1.0f;
+            float handedness =
+                _h0 * b0 + _h1 * b1 + _h2 * b2;
 
-            return Lighting.Shade(
-                position, normal, _cameraPosition, _lights,
-                albedo, specular, _shininess, emissive, _shadowMaps,
-                occlusion, _twoSided, _unlit);
-        }
+            // Shared with the ray tracer so material/texture interpretation is
+            // identical across engines (see Rendering/SurfaceShading.cs). The
+            // raster's visibility source is the per-light shadow map.
+            Lighting.ShadowMapVisibility visibility =
+                new Lighting.ShadowMapVisibility(_shadowMaps);
 
-        private Vector3f PerturbNormal(
-            Vector3f normal, float b0, float b1, float b2, Vector2f uv)
-        {
-            Vector3f tIn = _t0 * b0 + _t1 * b1 + _t2 * b2;
-
-            // Re-orthonormalize the tangent against the interpolated normal.
-            Vector3f t = tIn - normal * Vector3f.Dot(normal, tIn);
-
-            if (t.LengthSquared() < 1e-12f)
-                return normal;
-
-            t = t.Normalized();
-
-            float handedness = (_h0 * b0 + _h1 * b1 + _h2 * b2) < 0.0f ? -1.0f : 1.0f;
-            Vector3f bitangent = Vector3f.Cross(normal, t) * handedness;
-
-            Vector3f tn = SampleTangentNormal(uv);
-
-            // tangent-space -> world-space
-            return (t * tn.X + bitangent * tn.Y + normal * tn.Z).Normalized();
-        }
-
-        private Vector3f SampleTangentNormal(Vector2f uv)
-        {
-            // Normal/height maps store linear data, so no sRGB conversion.
-            if (_normalIsHeight)
-            {
-                float du = 1.0f / _normalMap!.Width;
-                float dv = 1.0f / _normalMap.Height;
-
-                float h = _normalMap.Sample(uv.X, uv.Y).R;
-                float hx = _normalMap.Sample(uv.X + du, uv.Y).R;
-                float hy = _normalMap.Sample(uv.X, uv.Y + dv).R;
-
-                return new Vector3f(
-                    (h - hx) * _bumpScale,
-                    (h - hy) * _bumpScale,
-                    1.0f).Normalized();
-            }
-
-            ColorRGBAf c = _normalMap!.Sample(uv.X, uv.Y);
-
-            float ny = (c.G * 2.0f - 1.0f) * _bumpScale;
-            if (_invertGreen)
-                ny = -ny;
-
-            return new Vector3f(
-                (c.R * 2.0f - 1.0f) * _bumpScale,
-                ny,
-                c.B * 2.0f - 1.0f).Normalized();
+            return SurfaceShading.Shade(
+                position, normal, tangent, handedness, uv, vcolor,
+                _cameraPosition, _lights, in visibility,
+                _diffuse, _specular, _emissive, _normalMap,
+                _normalIsHeight, _invertGreen, _bumpScale,
+                _tint, _specularColor, _shininess, _emissiveColor,
+                _occlusion, _alphaCutoff, _twoSided, _unlit,
+                out _);
         }
     }
 }

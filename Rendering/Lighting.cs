@@ -15,17 +15,58 @@ public static class Lighting
     private const float Ambient = 0.1f;
 
     /// <summary>
-    /// Computes the lit color at a surface point given its world-space
-    /// position and normal: diffuse Lambert + ambient, summed over all
-    /// lights in the scene.
-    ///
-    /// The same method backs every shading mode:
-    ///   - Flat    -> called once per triangle (face normal, centroid)
-    ///   - Gouraud -> called once per vertex   (vertex normal)
-    ///   - Phong   -> called once per pixel    (interpolated normal)
-    ///
-    /// <paramref name="baseColor"/> is the surface albedo (material diffuse
-    /// color, a texture sample tomorrow, or a random color as a fallback).
+    /// Debug: when set, <see cref="ShadeCore{TVis}"/> returns the per-light
+    /// visibility (shadow factor) as a grayscale value instead of the lit color
+    /// — 1 (white) = fully lit, 0 (black) = fully shadowed. Works for both
+    /// engines (raster shadow maps and ray-traced shadow rays go through the
+    /// same path), so the two can be compared directly. Set from
+    /// <c>RenderSettings.DebugShadow</c>.
+    /// </summary>
+    public static bool DebugShadowVisualize = false;
+
+    /// <summary>
+    /// Per-light visibility source. The BRDF is identical across engines; only
+    /// how a light's shadow factor (1 = lit, 0 = shadowed) is computed differs:
+    /// the rasterizer samples a shadow map, the ray tracer casts a shadow ray.
+    /// Implemented by structs so <see cref="ShadeCore{TVis}"/> monomorphizes
+    /// with no allocation and no virtual call (same pattern as IPixelShader).
+    /// </summary>
+    public interface IVisibility
+    {
+        float Visibility(int lightIndex, Vector3f worldPosition, Vector3f n, Vector3f L);
+    }
+
+    /// <summary>
+    /// Rasterizer visibility: samples the per-light shadow map (or 1 if there is
+    /// none). Reproduces the original in-loop shadow-map sampling exactly.
+    /// </summary>
+    public readonly struct ShadowMapVisibility : IVisibility
+    {
+        private readonly IReadOnlyList<ShadowMap?>? _maps;
+
+        public ShadowMapVisibility(IReadOnlyList<ShadowMap?>? maps)
+        {
+            _maps = maps;
+        }
+
+        public float Visibility(int lightIndex, Vector3f worldPosition, Vector3f n, Vector3f L)
+        {
+            if (_maps != null && lightIndex < _maps.Count)
+            {
+                ShadowMap? map = _maps[lightIndex];
+                if (map != null)
+                    return map.Sample(worldPosition, n, L);
+            }
+
+            return 1.0f;
+        }
+    }
+
+    /// <summary>
+    /// Computes the lit color at a surface point (diffuse Lambert + ambient +
+    /// Blinn-Phong specular + emissive, summed over all lights), sampling shadow
+    /// maps for visibility. Backs every rasterizer shading mode (Flat per
+    /// triangle, Gouraud per vertex, Phong/Texture per pixel).
     /// </summary>
     public static ColorRGBAf Shade(
         Vector3f worldPosition,
@@ -40,6 +81,54 @@ public static class Lighting
         float occlusion = 1.0f,
         bool twoSided = false,
         bool unlit = false)
+    {
+        return ShadeCore(
+            worldPosition, normal, viewPosition, lights,
+            baseColor, specularColor, shininess, emissive,
+            occlusion, twoSided, unlit,
+            new ShadowMapVisibility(shadowMaps));
+    }
+
+    /// <summary>
+    /// Same BRDF, with a caller-supplied visibility source (e.g. shadow rays in
+    /// the ray tracer). The struct constraint keeps it allocation-free.
+    /// </summary>
+    public static ColorRGBAf Shade<TVis>(
+        Vector3f worldPosition,
+        Vector3f normal,
+        Vector3f viewPosition,
+        IReadOnlyList<Light> lights,
+        ColorRGBAf baseColor,
+        ColorRGBAf specularColor,
+        float shininess,
+        ColorRGBAf emissive,
+        in TVis visibility,
+        float occlusion = 1.0f,
+        bool twoSided = false,
+        bool unlit = false)
+        where TVis : struct, IVisibility
+    {
+        return ShadeCore(
+            worldPosition, normal, viewPosition, lights,
+            baseColor, specularColor, shininess, emissive,
+            occlusion, twoSided, unlit,
+            visibility);
+    }
+
+    private static ColorRGBAf ShadeCore<TVis>(
+        Vector3f worldPosition,
+        Vector3f normal,
+        Vector3f viewPosition,
+        IReadOnlyList<Light> lights,
+        ColorRGBAf baseColor,
+        ColorRGBAf specularColor,
+        float shininess,
+        ColorRGBAf emissive,
+        float occlusion,
+        bool twoSided,
+        bool unlit,
+        in TVis visibility)
+        where TVis : struct, IVisibility
     {
         // Unlit (KHR_materials_unlit): the base color is the final color.
         if (unlit)
@@ -75,6 +164,10 @@ public static class Lighting
         float r = baseColor.R * Ambient;
         float g = baseColor.G * Ambient;
         float b = baseColor.B * Ambient;
+
+        // Debug: accumulate the per-light shadow factor for visualization.
+        float dbgShadowSum = 0.0f;
+        int dbgShadowCount = 0;
 
         if (lights != null)
         {
@@ -131,15 +224,12 @@ public static class Lighting
                         continue;
                 }
 
-                // Shadow factor (1 = lit, 0 = shadowed) from this light's map.
-                float shadow = 1.0f;
+                // Shadow factor (1 = lit, 0 = shadowed) from the visibility
+                // source (shadow map for the raster, shadow ray for the tracer).
+                float shadow = visibility.Visibility(li, worldPosition, n, L);
 
-                if (shadowMaps != null && li < shadowMaps.Count)
-                {
-                    ShadowMap? map = shadowMaps[li];
-                    if (map != null)
-                        shadow = map.Sample(worldPosition, n, L);
-                }
+                dbgShadowSum += shadow;
+                dbgShadowCount++;
 
                 float ndotl =
                     MathF.Max(
@@ -173,6 +263,13 @@ public static class Lighting
                     b += specularColor.B * lightColor.B * specular;
                 }
             }
+        }
+
+        // Debug: output the average per-light shadow factor as grayscale.
+        if (DebugShadowVisualize)
+        {
+            float s = dbgShadowCount > 0 ? dbgShadowSum / dbgShadowCount : 1.0f;
+            return new ColorRGBAf(s, s, s, 1.0f);
         }
 
         // Ambient occlusion scales the ambient + lit result (not emissive).

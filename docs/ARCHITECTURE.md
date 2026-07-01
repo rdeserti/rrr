@@ -13,8 +13,12 @@ executable, no external dependencies.
 - `ColorRGBA32` — byte RGBA. `FromRGBAf`.
 - `PixelPacker` (file `PixlePacker.cs`) — pack/unpack `uint` as **AARRGGBB**.
 - `PixelFormat` — only `RGBA32`.
-- `ColorSpace` — `SrgbToLinear` / `LinearToSrgb` **placeholders (identity)**;
-  call sites exist (texture sampling) for future gamma-correct lighting.
+- `ColorSpace` — real piecewise **sRGB <-> linear** (`SrgbToLinear`/`LinearToSrgb`),
+  each direction gated by its own static flag (`SrgbToLinearEnabled` /
+  `LinearToSrgbEnabled`, set per render from `RenderSettings.LinearizeInput` /
+  `EncodeSrgb`). Both **on by default**; a disabled direction is an immediate
+  identity (no per-channel pow). Turning both off is bit-identical to the
+  pre-gamma behaviour.
 - `Profiler` — `Start` / `Mark(name)` / `Dump`.
 
 ### `VMath` — math
@@ -42,6 +46,8 @@ executable, no external dependencies.
   `NormalIsHeightMap`, `InvertNormalGreen`, `BumpScale`, `OcclusionTexture`
   (AO). Plus `AlphaMode` (Opaque/Mask/Blend) + `AlphaCutoff` (alpha-test),
   `DoubleSided` (per-material backface cull + two-sided normal), `Unlit`.
+  **Ray-tracer only:** `Transmission` (0..1, refraction amount) and
+  `IndexOfRefraction` (default 1.5) — ignored by the rasterizer.
 - `Texture2D` — wraps a `FrameBuffer`; `WrapU/V`, `Filter`, `Sample` (nearest/
   bilinear), `TryLoad(path)` (safe → null on failure), `IsLikelyGrayscale()`.
 - `Light` (abstract) — `CastsShadows` (default true). Subtypes: `PointLight`
@@ -97,10 +103,14 @@ executable, no external dependencies.
   Walks the node graph composing transforms (`Gltf/Mat4`, column-major, TRS or
   matrix) and **bakes the world matrix into the vertices**. Converts RH→LH by
   negating Z and flipping winding; **does not flip v** (glTF UVs are already
-  top-left). PBR metallic-roughness → Blinn-Phong (`baseColorFactor`→diffuse,
-  `roughnessFactor`→shininess, `emissiveFactor` × `KHR_materials_emissive_strength`,
+  top-left). PBR metallic-roughness → Blinn-Phong: `baseColorFactor`→diffuse,
+  `roughnessFactor`→shininess, and **`metallicFactor`** tints the specular
+  (`SpecularColor = lerp(0.04, baseColor, metallic)`; diffuse halved for metals,
+  not zeroed, so they stay visible in the raster) — this drives the ray tracer's
+  derived reflectivity. Also `emissiveFactor` × `KHR_materials_emissive_strength`,
   `occlusionTexture`, `alphaMode`/`alphaCutoff`, `doubleSided`,
-  `KHR_materials_unlit`, base/emissive/normal textures).
+  `KHR_materials_unlit`, **`KHR_materials_transmission`** (→ `Transmission`) and
+  **`KHR_materials_ior`** (→ `IndexOfRefraction`), base/emissive/normal textures.
   Textures resolve from external files, data-URIs and **bufferView-embedded**
   images (PNG/BMP/JPEG, via `ImageReader.Load(byte[])`), each **decoded once and
   in parallel** (`DecodeImages`) — the bulk of load time on texture-heavy models.
@@ -116,7 +126,9 @@ executable, no external dependencies.
   DTOs in `Gltf/GltfDom.cs`.
 
 ### `Rendering` — the pipeline
-- `RenderPipeline.Render(fb, db, scene, settings)` — the orchestrator.
+- `RenderPipeline.Render(fb, db, scene, settings)` — the orchestrator. First
+  dispatches on `settings.Engine`: `Raytrace` → `Raytracing.RayTracer.Render`
+  (depth buffer unused), otherwise the rasterizer below.
 - `Rasterizer` — `DrawLine`, `FillTriangle` (uint and generic `<TShader>`),
   incremental edges, per-scanline spans, horizontal band clamp, perspective-
   correct weights. The generic fill depth-tests (peek) before shading and writes
@@ -129,18 +141,75 @@ executable, no external dependencies.
 - `IPixelShader` — `Shade(b0,b1,b2)`; implemented by struct shaders for
   zero-alloc, inlinable, perspective-correct shading.
 - `Lighting.Shade(...)` — ambient + per-light diffuse/specular (× shadow) +
-  emissive; handles point/directional/spot; takes the parallel shadow-map list.
-  Optional `occlusion` (scales ambient+lit, not emissive), `twoSided` (flips the
-  normal toward the viewer), `unlit` (returns the base color directly).
-- `RenderSettings` — shading mode, backface cull, and all shadow knobs (see
-  below). Factory helpers `Flat()/Gouraud()/Phong()/WireFrame()`.
+  emissive; handles point/directional/spot. Optional `occlusion` (scales
+  ambient+lit, not emissive), `twoSided` (flips the normal toward the viewer),
+  `unlit` (returns the base color directly). The BRDF is in `ShadeCore<TVis>`
+  with a **zero-alloc generic visibility hook** `IVisibility`: the raster passes
+  `ShadowMapVisibility` (samples the shadow-map list), the ray tracer passes
+  `RayShadowVisibility` (casts shadow rays). One shared BRDF, two shadow sources.
+  Debug: `DebugShadowVisualize` (from `RenderSettings.DebugShadow`, script
+  `debugshadow=on`) makes it return the per-light shadow factor as grayscale —
+  the same path on both engines, so their shadows can be compared directly.
+- `SurfaceShading.Shade<TVis>(...)` — material/texture surface evaluation
+  (albedo + diffuse/specular/emissive maps + normal/height map + occlusion +
+  alpha-mask + two-sided/unlit) shared by the raster's `TextureShader` and the
+  ray tracer, so both interpret materials identically. Calls `Lighting.Shade`.
+  Outputs the perturbed shading normal (`out shadingNormal`) so the ray tracer
+  reflects/refracts off the normal-mapped surface, not the interpolated normal.
+- `Supersampler.Downsample(fb, factor)` — SSAA: box-averages a `factor×factor`
+  oversized framebuffer down to output size (engine-agnostic; see funnel below).
+- `RenderSettings` — `Engine` (Raster/Raytrace), shading mode, backface cull,
+  all shadow knobs (see below), `Supersampling` (SSAA factor), `LinearizeInput`
+  + `EncodeSrgb` (gamma), and ray-tracer knobs
+  `MaxBounces`/`RayShadows`/`ShadowSamples`. Factory helpers
+  `Flat()/Gouraud()/Phong()/WireFrame()`.
 - `ShadingMode` — Wireframe/Flat/Gouraud/Phong.
-- `ShadowMap` — per-light depth map + `Sample(worldPos, normal, L)` (normal-
-  offset bias, small depth bias, PCF or PCSS).
-- `ShadowMapRenderer` — `BuildLightMatrix(light, min, max, out worldExtent)`
-  (ortho/perspective, tight near/far via `DepthRange` over the bbox corners),
-  and `Render(...)` (reuses `Rasterizer` to fill a depth buffer; front-face
-  culling).
+- `ShadowMap` — per-light depth map + `Sample(worldPos, normal, L)`. Stores
+  **linear light-space depth** (light-view Z), not perspective NDC z, so the
+  occluder/receiver comparison has uniform precision; PCF or PCSS, small
+  linear-units bias + normal-offset. (NDC z crammed its precision near the light,
+  forcing a bias so large it bored a bright hole in contact shadows.)
+- `ShadowMapRenderer` — `BuildLightMatrix(light, min, max, out worldExtent, out
+  view)` (ortho/perspective, tight near/far via `DepthRange`) and `Render(...)`:
+  reuses `Rasterizer` for the texel coverage (perspective screen xy) but writes
+  the **linear light-view Z** as the depth value; front-face culling.
+
+### `Rendering/Raytracing` — the ray tracer
+A Whitted ray tracer that consumes the **same** `Scene`/`Camera`/`Light`/
+`Material`/`Texture2D` as the rasterizer and writes the same `FrameBuffer`, so
+it slots into the `App` funnel (profiler/stats/output stay shared). Selected via
+`RenderSettings.Engine = Raytrace`.
+- `Ray` / `RayHit` — half-line (origin + normalized direction) and the nearest-
+  hit record (position, interpolated normal/tangent/handedness/uv/color, material).
+- `RayCamera` — primary rays matching the raster camera exactly (LH basis from
+  `CreateLookAt`, vertical FOV from `CreatePerspective`, top-left pixel origin),
+  so silhouettes line up. Supports sub-pixel jitter (unused by SSAA).
+- `Aabb` — AABB with a slab ray test (precomputed `invDir`).
+- `RayScene` — world-space triangle soup (bakes `SceneObject.Transform` like the
+  raster's `ProjectTriangle`) + a **BVH** (midpoint split on the largest centroid
+  axis, median fallback; flat node array; allocation-free iterative traversal via
+  `stackalloc`). `Intersect` (nearest, Möller–Trumbore, two-sided) and
+  `IntersectAny` (shadow-ray any-hit). Exposes scene `Bounds`.
+- `RayShadowVisibility` (`IVisibility`) — shadow factor per light: shadow ray
+  toward the light (finite for point/spot, infinite for directional), gated by
+  `Light.CastsShadows` + `RenderSettings.RayShadows`, normal-offset bias scaled
+  to the scene diagonal. **Soft shadows** when `ShadowSoftness > 0`: averages
+  `ShadowSamples` rays over a disk around the light (Fibonacci pattern rotated by
+  a per-point hash → noise not banding). **Transparent shadows**: opaque scenes
+  use the cheap `IntersectAny`; otherwise the ray walks transparent surfaces
+  accumulating transmittance (glass `Transmission`, blend `1-alpha`, masked
+  cutout) until an opaque hit.
+- `RayTracer` — recursive `Trace(ray, depth)` to `MaxBounces`. Skips alpha-test
+  **Mask** cutout fragments (pass-through, no bounce), shades the hit via the
+  shared `SurfaceShading` (+ shadow rays), then: **refraction** for transmissive
+  materials (dielectric: Fresnel split into reflected + refracted rays, Snell +
+  total-internal-reflection, blended by `Transmission`); **alpha-Blend**
+  composite (`local·a + behind·(1-a)` via a continuation ray); **reflection** for
+  glossy materials (gloss = `smoothstep(24,160, Shininess)`, Fresnel-Schlick with
+  `F0 = SpecularColor`, blended `local·(1-kr)+reflected·kr`). Reflection and
+  refraction use the **perturbed** shading normal from `SurfaceShading`, so
+  normal/height-mapped surfaces reflect/refract their detail. Misses return the
+  background. `Parallel.For` over disjoint rows.
 
 ### `Scripting`
 - `SceneScript.Run(path)` — lexer (quote-aware) + per-line dispatch; builds a
@@ -159,7 +228,13 @@ executable, no external dependencies.
 ### `App` — application layer
 - `SceneRenderer.Render(scene, settings, output, w, h, background)` — the
   **single funnel**: creates buffers, renders, saves, prints profiler + stats.
-  `RenderObjFile(obj, output)` is the OBJ quick path (comfy camera/light, Flat).
+  Applies **supersampling** here (engine-agnostic): renders into a
+  `w·ss × h·ss` buffer then `Supersampler.Downsample`s to `w × h`
+  (`ss = RenderSettings.Supersampling`, clamped 1–4). Sets the `ColorSpace`
+  gamma flags, decodes the background to linear at clear (when `LinearizeInput`)
+  and runs the final linear->sRGB `EncodeToSrgb` pass after the downsample (when
+  `EncodeSrgb`). `RenderObjFile(obj, output)` is the OBJ quick path (comfy
+  camera/light, Flat).
 - `SceneStats` — counts cameras/lights/objects/vertices/triangles/textures and
   estimates memory.
 - `Log.Debug(...)` — `[Conditional("DEBUG")]`, prints to stdout in Debug only.
@@ -176,16 +251,21 @@ CLI (Program.cs)
  └─ *.obj/stl/gltf/glb → SceneRenderer.RenderModelFile (ModelImporter) ─┐
                                           ▼
                          SceneRenderer.Render(scene, settings, ...)
-                          (Profiler + SceneStats)
+                          (Profiler + SceneStats; SSAA: render at w·ss × h·ss)
                                           ▼
                          RenderPipeline.Render(fb, db, scene, settings)
-                          1) BuildShadowMaps (one per shadow-casting light)
-                          2) untextured pass  (Flat/Gouraud/Phong shader)
-                          3) textured pass    (TextureShader)
+                          │
+                          ├─ Engine = Raster:
+                          │   1) BuildShadowMaps (one per shadow-casting light)
+                          │   2) untextured pass  (Flat/Gouraud/Phong shader)
+                          │   3) textured pass    (TextureShader)
+                          │      → Rasterizer.FillTriangle → FrameBuffer
+                          │
+                          └─ Engine = Raytrace:
+                              RayTracer.Render → BVH trace per pixel
+                              (shade + shadow rays + reflection/refraction)
                                           ▼
-                         Rasterizer.FillTriangle → FrameBuffer
-                                          ▼
-                         ImageWriter.Save(fb, output)
+                         Supersampler.Downsample (if ss > 1) → ImageWriter.Save
 ```
 
 ## Rasterization pipeline (shaded)
@@ -225,15 +305,26 @@ For each shadow-casting light (`BuildShadowMaps`):
    directional → orthographic, spot → perspective (fov = full cone), point →
    perspective aimed at the scene center. Near/far are tightened by projecting
    the 8 bbox corners (`DepthRange`) for depth precision. Returns `worldExtent`
-   (→ world texel size for the normal-offset).
-2. `ShadowMapRenderer.Render` rasterizes scene depth into a `DepthBuffer`
-   (reusing `Rasterizer`), with **front-face culling** (back faces only).
+   (→ world texel size for the normal-offset). For perspective lights this is the
+   **angular** texel size `fov·dist`, not `2·tan(fov/2)·dist` — the latter
+   over-estimates the texel size at wide FOVs (a large floor inflates the
+   bounding sphere → FOV clamps near 160° → `tan` blows up ~4×), which
+   over-pushes the normal-offset and leaks light through contact shadows.
+2. `ShadowMapRenderer.Render` rasterizes the scene into a `DepthBuffer` storing
+   **linear light-view Z** (not NDC z), with **front-face culling** (back faces
+   only → second-depth, which also keeps the lit occluder surface out of its own
+   map, avoiding self-shadow acne).
 3. The resulting `ShadowMap` is sampled in `Lighting.Shade` per light:
-   - **Normal-offset bias**: sample point pushed along the normal by a few world
-     texels (× PCF radius, × grazing).
-   - Small constant depth bias.
+   - The receiver's **linear** light-view Z is compared to the stored occluder
+     distance. Because precision is uniform, a **small constant bias** (~½ texel
+     in world units) removes residual acne without leaking — unlike NDC z, where
+     the required bias was huge at the occluder distance and leaked the umbra.
+   - **Normal-offset**: sample pushed along the normal ~1 texel (× `1 + 2·slope`)
+     to keep the contact line off the marginal comparison zone.
    - **PCF** (`ShadowPcfRadius`) or, if `ShadowSoftness > 0`, **PCSS** (blocker
      search → penumbra estimate → variable-radius PCF; kernel capped at 12).
+   - *Residual:* the contact shadow edge can stair-step (shadow-map aliasing at
+     grazing angles); raise `ShadowMapResolution` or rely on PCF/PCSS softening.
 
 Shadow settings live in `RenderSettings`: `ShadowsEnabled`,
 `ShadowMapResolution`, `ShadowPcfRadius`, `ShadowFrontFaceCull`,
@@ -251,9 +342,13 @@ Shadow settings live in `RenderSettings`: `ShadowsEnabled`,
   is flipped at import.
 - **Normals:** if a mesh lacks per-vertex normals, the geometric face normal is
   used as a fallback (so unlit OBJs still shade).
-- **Maps are linear data:** normal/height/specular maps are sampled without the
-  sRGB placeholder; diffuse/emissive go through `ColorSpace.SrgbToLinear`
-  (currently identity).
+- **Gamma (on by default; `LinearizeInput` + `EncodeSrgb`):** color inputs are
+  decoded sRGB->linear (diffuse/emissive textures **and** flat diffuse/emissive
+  colors **and** the background), lighting/reflection/refraction/SSAA happen in
+  linear, and the final image is encoded linear->sRGB once after the downsample.
+  normal/height/specular/occlusion maps and specular color are **linear data** —
+  never decoded. The two directions switch independently; both off = identity
+  everywhere (pre-gamma behaviour).
 
 ## Known limitations
 
@@ -263,22 +358,42 @@ Shadow settings live in `RenderSettings`: `ShadowsEnabled`,
   omnidirectional cube map (intentionally dropped for the rasterizer).
 - PCSS visible penumbra is bounded by the kernel cap (12 texels) and the
   shadow-map resolution; cost grows with the kernel.
-- `ColorSpace` is a no-op placeholder (no gamma-correct lighting yet).
+- Gamma correction is **on by default** (independently switchable via
+  `LinearizeInput`/`EncodeSrgb`); the 8-bit linear intermediate framebuffer can
+  band slightly in deep shadows — a float render target would remove that
+  (future work). `linearize=off srgb=off` reproduces the old uncorrected look.
+- Ray tracer: transparency is handled for both camera/secondary rays
+  (transmission/refraction, alpha-blend composite, masked cutout) **and shadows**
+  (shadow rays accumulate transmittance through glass/blend/cutout). Shadow
+  transmittance is **scalar** (no colored/tinted shadows) and there are **no
+  caustics** (no light focusing through refraction). Reflection-ray misses
+  return the flat background (no environment map); BVH uses a midpoint split
+  (no SAH). See `docs/RAYTRACER_ROADMAP.md`.
 - A leftover sample type (`Scene/SphereScene.cs`, `MeshUtils`, `Vertex`) may be
   unused scaffolding.
 
-## Extending with the ray tracer (planned)
+## Ray tracer (implemented)
 
-The clean insertion point is the **`App` funnel** and `RenderSettings`:
-- Add an engine selector (e.g. `RenderSettings.Engine = Raster | Raytrace`),
-  set from the CLI and from a `.rrr` `rendering engine=...` argument.
-- Implement a ray tracer that consumes the same `Scene` (+ `Camera`, `Lights`,
-  `Material`/`Texture2D`) and produces a `FrameBuffer`.
-- `SceneRenderer.Render` dispatches to rasterizer or ray tracer based on the
-  engine; profiling, stats and image output stay shared.
-- Reuse: `VMath`, `Scene`, `Material`/`Texture2D` sampling, `Lighting` math
-  (diffuse/specular/emissive), `ImageWriter`. Shadows in a ray tracer come for
-  free from shadow rays (the shadow-map system is rasterizer-specific).
+A Whitted ray tracer (`Rendering/Raytracing`, selected by
+`RenderSettings.Engine = Raytrace`, scriptable via `rendering engine=raytrace`)
+shares the entire scene model with the rasterizer:
+- **Insertion point:** `RenderPipeline.Render` dispatches on `Engine`;
+  `SceneRenderer.Render` (buffers, SSAA, profiler, stats, output) is unchanged.
+- **Reuse:** `VMath`, `Scene`, `Material`/`Texture2D` sampling, and — crucially —
+  the same `Lighting.Shade` BRDF and the same `SurfaceShading` material/texture
+  evaluation, so a non-reflective, non-transmissive material renders comparably
+  to the raster. The shadow-map system stays rasterizer-specific; the tracer gets
+  shadows from shadow rays via the shared `IVisibility` hook.
+- **Features:** BVH acceleration; hard + soft (area-light) + transparency-
+  attenuated shadows; recursive
+  reflections (reflectivity derived from `SpecularColor`+`Shininess`, no new
+  Scene field beyond the additive transmission/ior); dielectric refraction
+  (`Transmission`/`IndexOfRefraction`, from glTF `KHR_materials_transmission`/
+  `_ior`); alpha-test (Mask) cutout pass-through and alpha-Blend compositing to
+  match the raster's transparency passes; SSAA shared with the raster.
+- **Roadmap / remaining gaps** are tracked in `docs/RAYTRACER_ROADMAP.md`
+  (alpha-blend & masked transparency in the tracer, transparent/colored shadows
+  through glass, reflections off normal-mapped surfaces, environment map, gamma).
 
 ## Build & run
 
